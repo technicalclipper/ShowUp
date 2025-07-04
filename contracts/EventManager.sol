@@ -39,7 +39,7 @@ contract ShowUpEvent {
         return eventCount;
     }
 
- function joinEvent(uint256 eventId) external payable {
+    function joinEvent(uint256 eventId) external payable {
         Event storage e = events[eventId];
         require(!e.finalized, "Already finalized");
         require(!e.hasStaked[msg.sender], "Already joined");
@@ -51,7 +51,16 @@ contract ShowUpEvent {
         emit Joined(eventId, msg.sender);
     }
 
-   
+     function markAttendance(uint256 eventId, address user) external onlyCreator(eventId) {
+        Event storage e = events[eventId];
+        require(e.hasStaked[user], "User did not join");
+
+        e.attended[user] = true;
+
+        emit AttendanceMarked(eventId, user);
+    }
+
+    
 
     
 
