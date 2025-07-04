@@ -149,6 +149,11 @@ bot.onText(/\/events/, async (msg) => {
         
         let message = '';
 
+        // Helper function to escape special characters in wallet addresses
+        const escapeWalletAddress = (address) => {
+            return address.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
+        };
+
         // Show available events (events not joined by user)
         const availableEvents = allEvents.filter(event => 
             !joinedEvents.some(joined => joined.events.id === event.id)
@@ -159,10 +164,11 @@ bot.onText(/\/events/, async (msg) => {
             
             availableEvents.forEach((event, index) => {
                 const eventDate = new Date(event.date).toLocaleString();
+                const escapedCreator = escapeWalletAddress(event.creator);
                 message += `${index + 1}. **${event.name}**\n`;
                 message += `   📅 ${eventDate}\n`;
                 message += `   💰 Stake: ${event.stake_amount} ETH\n`;
-                message += `   👤 Creator: \`${event.creator}\`\n`;
+                message += `   👤 Creator: \`${escapedCreator}\`\n`;
                 message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
             });
         } else {
@@ -176,10 +182,11 @@ bot.onText(/\/events/, async (msg) => {
             joinedEvents.forEach((joined, index) => {
                 const event = joined.events;
                 const eventDate = new Date(event.date).toLocaleString();
+                const escapedCreator = escapeWalletAddress(event.creator);
                 message += `${index + 1}. **${event.name}**\n`;
                 message += `   📅 ${eventDate}\n`;
                 message += `   💰 Stake: ${event.stake_amount} ETH\n`;
-                message += `   👤 Creator: \`${event.creator}\`\n`;
+                message += `   👤 Creator: \`${escapedCreator}\`\n`;
                 message += `   ${joined.attended ? '✅ Attended' : '⏳ Not Attended'}\n`;
                 message += `   ${event.finalized ? '🏁 Event Finalized' : '🔄 Event Active'}\n\n`;
             });
@@ -415,9 +422,19 @@ bot.on('message', async (msg) => {
                             `💰 Stake Amount: ${event.stake_amount} ETH\n` +
                             `👤 Creator: \`${event.creator}\`\n\n` +
                             `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ETH from your wallet.\n\n` +
-                            `React with 👍 to confirm and join the event, or send "cancel" to abort.`;
+                            `Click the button below to confirm:`;
 
-                        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+                        await bot.sendMessage(chatId, message, {
+                            parse_mode: 'Markdown',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [
+                                        { text: '✅ Join Event', callback_data: `join_confirm_${event.id}` },
+                                        { text: '❌ Cancel', callback_data: 'join_cancel' }
+                                    ]
+                                ]
+                            }
+                        });
                     } else {
                         // Multiple events found, show options
                         data.eventOptions = events;
@@ -431,9 +448,20 @@ bot.on('message', async (msg) => {
                             message += `   📅 ${eventDate}\n`;
                             message += `   💰 Stake: ${event.stake_amount} ETH\n\n`;
                         });
-                        message += `Please send the number (1-${events.length}) of the event you want to join:`;
+                        message += `Select an event to join:`;
 
-                        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+                        // Create inline keyboard with event options
+                        const keyboard = events.map((event, index) => [
+                            { text: `${index + 1}. ${event.name}`, callback_data: `select_event_${event.id}` }
+                        ]);
+                        keyboard.push([{ text: '❌ Cancel', callback_data: 'join_cancel' }]);
+
+                        await bot.sendMessage(chatId, message, {
+                            parse_mode: 'Markdown',
+                            reply_markup: {
+                                inline_keyboard: keyboard
+                            }
+                        });
                     }
                     break;
 
@@ -458,49 +486,22 @@ bot.on('message', async (msg) => {
                         `💰 Stake Amount: ${selectedEvent.stake_amount} ETH\n` +
                         `👤 Creator: \`${selectedEvent.creator}\`\n\n` +
                         `⚠️ **Important:** Joining this event will stake ${selectedEvent.stake_amount} ETH from your wallet.\n\n` +
-                        `React with 👍 to confirm and join the event, or send "cancel" to abort.`;
+                        `Click the button below to confirm:`;
 
-                    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-                    break;
-
-                case 'confirmation':
-                    if (msg.text?.toLowerCase() === 'cancel') {
-                        await bot.sendMessage(chatId, '❌ Event joining cancelled.');
-                        joinStates.delete(telegramId);
-                        return;
-                    }
-
-                    // Check if user reacted with 👍 or sent "confirm"
-                    if (msg.text?.toLowerCase() === 'confirm' || msg.text?.toLowerCase() === 'yes') {
-                        await bot.sendMessage(chatId, '⏳ Joining event... Please wait.');
-                        
-                        try {
-                            const result = await joinEvent(telegramId, data.selectedEvent.id);
-                            
-                            const successMessage = 
-                                `🎉 **Successfully Joined Event!**\n\n` +
-                                `📅 **Event:** ${result.eventName}\n` +
-                                `💰 **Stake Paid:** ${result.stakeAmount} ETH\n` +
-                                `🔗 **Transaction:** \`${result.txHash}\`\n\n` +
-                                `✅ You are now a participant! Show up to get your stake back plus rewards!`;
-
-                            await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
-
-                        } catch (error) {
-                            console.error('Error joining event:', error);
-                            await bot.sendMessage(chatId, 
-                                `❌ Failed to join event: ${error.message}`
-                            );
+                    await bot.sendMessage(chatId, message, {
+                        parse_mode: 'Markdown',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: '✅ Join Event', callback_data: `join_confirm_${selectedEvent.id}` },
+                                    { text: '❌ Cancel', callback_data: 'join_cancel' }
+                                ]
+                            ]
                         }
-
-                        // Clear join state
-                        joinStates.delete(telegramId);
-                    } else {
-                        await bot.sendMessage(chatId, 
-                            '❌ Please send "confirm" to join the event or "cancel" to abort.'
-                        );
-                    }
+                    });
                     break;
+
+
             }
         }
 
@@ -511,5 +512,93 @@ bot.on('message', async (msg) => {
         );
         userStates.delete(msg.from.id);
         joinStates.delete(msg.from.id);
+    }
+});
+
+// Handle inline button callbacks
+bot.on('callback_query', async (callbackQuery) => {
+    try {
+        const data = callbackQuery.data;
+        const chatId = callbackQuery.message.chat.id;
+        const telegramId = callbackQuery.from.id;
+        const userName = callbackQuery.from.first_name || callbackQuery.from.username || 'User';
+
+        // Answer the callback query to remove loading state
+        await bot.answerCallbackQuery(callbackQuery.id);
+
+        if (data === 'join_cancel') {
+            await bot.sendMessage(chatId, '❌ Event joining cancelled.');
+            joinStates.delete(telegramId);
+            return;
+        }
+
+        if (data.startsWith('select_event_')) {
+            const eventId = parseInt(data.replace('select_event_', ''));
+            const event = await getEventById(eventId);
+            
+            if (!event) {
+                await bot.sendMessage(chatId, '❌ Event not found. Please try again.');
+                joinStates.delete(telegramId);
+                return;
+            }
+
+            const eventDate = new Date(event.date).toLocaleString();
+            const message = 
+                `📅 **Event Selected:** ${event.name}\n\n` +
+                `📅 Date: ${eventDate}\n` +
+                `💰 Stake Amount: ${event.stake_amount} ETH\n` +
+                `👤 Creator: \`${event.creator}\`\n\n` +
+                `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ETH from your wallet.\n\n` +
+                `Click the button below to confirm:`;
+
+            await bot.sendMessage(chatId, message, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '✅ Join Event', callback_data: `join_confirm_${event.id}` },
+                            { text: '❌ Cancel', callback_data: 'join_cancel' }
+                        ]
+                    ]
+                }
+            });
+            return;
+        }
+
+        if (data.startsWith('join_confirm_')) {
+            const eventId = parseInt(data.replace('join_confirm_', ''));
+            
+            await bot.sendMessage(chatId, '⏳ Joining event... Please wait.');
+            
+            try {
+                const result = await joinEvent(telegramId, eventId);
+                
+                const successMessage = 
+                    `🎉 **Successfully Joined Event!**\n\n` +
+                    `📅 **Event:** ${result.eventName}\n` +
+                    `💰 **Stake Paid:** ${result.stakeAmount} ETH\n` +
+                    `🔗 **Transaction:** \`${result.txHash}\`\n\n` +
+                    `✅ You are now a participant! Show up to get your stake back plus rewards!`;
+
+                await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
+
+            } catch (error) {
+                console.error('Error joining event:', error);
+                await bot.sendMessage(chatId, 
+                    `❌ Failed to join event: ${error.message}`
+                );
+            }
+
+            // Clear join state
+            joinStates.delete(telegramId);
+            return;
+        }
+
+    } catch (error) {
+        console.error('Error handling callback query:', error);
+        await bot.sendMessage(callbackQuery.message.chat.id, 
+            '❌ Sorry, there was an error. Please try again.'
+        );
+        joinStates.delete(callbackQuery.from.id);
     }
 });
