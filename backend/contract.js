@@ -171,6 +171,40 @@ async function getEvents() {
     }
 }
 
+// Get events joined by a specific user
+async function getJoinedEvents(telegramId) {
+    try {
+        const { data, error } = await supabase
+            .from('participants')
+            .select(`
+                event_id,
+                has_staked,
+                attended,
+                events (
+                    id,
+                    name,
+                    date,
+                    stake_amount,
+                    creator,
+                    finalized,
+                    chain
+                )
+            `)
+            .eq('telegram_id', telegramId.toString())
+            .order('event_id', { ascending: true });
+
+        if (error) {
+            console.error('Database error:', error);
+            throw error;
+        }
+
+        return data;
+    } catch (error) {
+        console.error('Error getting joined events:', error);
+        throw error;
+    }
+}
+
 // Get event by name
 async function getEventByName(eventName) {
     try {
@@ -318,6 +352,7 @@ module.exports = {
     getWalletBalance,
     createEvent,
     getEvents,
+    getJoinedEvents,
     getEventByName,
     getEventById,
     joinEvent

@@ -3,7 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { createWallet, getUserWallet, getWalletBalance, createEvent, getEvents, getEventByName, getEventById, joinEvent } = require('./contract');
+const { createWallet, getUserWallet, getWalletBalance, createEvent, getEvents, getJoinedEvents, getEventByName, getEventById, joinEvent } = require('./contract');
 
 // Get token from environment variable
 const token = process.env.token;
@@ -139,24 +139,64 @@ bot.onText(/\/create_event/, async (msg) => {
 bot.onText(/\/events/, async (msg) => {
     try {
         const chatId = msg.chat.id;
+        const telegramId = msg.from.id;
         
-        const events = await getEvents();
+        // Get all available events
+        const allEvents = await getEvents();
         
-        if (events.length === 0) {
-            await bot.sendMessage(chatId, '📅 No events found. Create one with /create_event!');
-            return;
+        // Get events joined by this user
+        const joinedEvents = await getJoinedEvents(telegramId);
+        
+        let message = '';
+
+        // Show available events (events not joined by user)
+        const availableEvents = allEvents.filter(event => 
+            !joinedEvents.some(joined => joined.events.id === event.id)
+        );
+
+        if (availableEvents.length > 0) {
+            message += '📅 **Available Events:**\n\n';
+            
+            availableEvents.forEach((event, index) => {
+                const eventDate = new Date(event.date).toLocaleString();
+                message += `${index + 1}. **${event.name}**\n`;
+                message += `   📅 ${eventDate}\n`;
+                message += `   💰 Stake: ${event.stake_amount} ETH\n`;
+                message += `   👤 Creator: \`${event.creator}\`\n`;
+                message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
+            });
+        } else {
+            message += '📅 **No available events to join.**\n\n';
         }
 
-        let message = '📅 **Available Events:**\n\n';
-        
-        events.forEach((event, index) => {
-            const eventDate = new Date(event.date).toLocaleString();
-            message += `${index + 1}. **${event.name}**\n`;
-            message += `   📅 ${eventDate}\n`;
-            message += `   💰 Stake: ${event.stake_amount} ETH\n`;
-            message += `   👤 Creator: \`${event.creator}\`\n`;
-            message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
-        });
+        // Show joined events
+        if (joinedEvents.length > 0) {
+            message += '🎉 **Your Joined Events:**\n\n';
+            
+            joinedEvents.forEach((joined, index) => {
+                const event = joined.events;
+                const eventDate = new Date(event.date).toLocaleString();
+                message += `${index + 1}. **${event.name}**\n`;
+                message += `   📅 ${eventDate}\n`;
+                message += `   💰 Stake: ${event.stake_amount} ETH\n`;
+                message += `   👤 Creator: \`${event.creator}\`\n`;
+                message += `   ${joined.attended ? '✅ Attended' : '⏳ Not Attended'}\n`;
+                message += `   ${event.finalized ? '🏁 Event Finalized' : '🔄 Event Active'}\n\n`;
+            });
+        } else {
+            message += '🎉 **You haven\'t joined any events yet.**\n';
+            message += 'Use /join_event to join an event!\n\n';
+        }
+
+        // Add helpful footer
+        if (allEvents.length === 0) {
+            message = '📅 **No events found.**\n\nCreate one with /create_event!';
+        } else {
+            message += '💡 **Tips:**\n';
+            message += '• Use /join_event to join available events\n';
+            message += '• Use /create_event to create new events\n';
+            message += '• Show up to events to get your stake back + rewards!';
+        }
 
         await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 
