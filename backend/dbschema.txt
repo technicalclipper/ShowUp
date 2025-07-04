@@ -1,0 +1,47 @@
+🗂️ events Table
+sql
+
+create table events (
+  id integer primary key,
+  name text not null,
+  date timestamptz not null,
+  stake_amount float not null,
+  creator text not null,
+  finalized boolean default false,
+  chain text not null,
+  ens_name text,
+  location_lat float,
+  location_lng float
+);
+
+
+👥 participants Table
+sql
+CopyEdit
+create table participants (
+  id serial primary key,
+  event_id integer references events(id) on delete cascade,
+  wallet text not null,
+  telegram_id text,
+  has_staked boolean default false,
+  attended boolean default false,
+  checkin_time timestamptz,
+  photo_url text,
+  location_lat float,
+  location_lng float,
+  payout float
+);
+
+
+🧠 memory_posters Table
+sql
+CopyEdit
+create table memory_posters (
+  id serial primary key,
+  event_id integer references events(id) on delete cascade,
+  image_url text not null,
+  created_at timestamptz default now()
+);
+
+
+
