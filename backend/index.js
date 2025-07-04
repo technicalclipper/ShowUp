@@ -3,7 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { createWallet, getUserWallet, getWalletBalance, createEvent, getEvents } = require('./contract');
+const { createWallet, getUserWallet, getWalletBalance, createEvent, getEvents, getEventByName, getEventById, joinEvent } = require('./contract');
 
 // Get token from environment variable
 const token = process.env.token;
@@ -93,8 +93,9 @@ bot.onText(/\/wallet/, async (msg) => {
     }
 });
 
-// Store user states for event creation
+// Store user states for event creation and joining
 const userStates = new Map();
+const joinStates = new Map();
 
 // Handle /create_event command
 bot.onText(/\/create_event/, async (msg) => {
@@ -132,155 +133,7 @@ bot.onText(/\/create_event/, async (msg) => {
     }
 });
 
-// Handle event creation steps
-bot.on('message', async (msg) => {
-    try {
-        const chatId = msg.chat.id;
-        const telegramId = msg.from.id;
-        const userState = userStates.get(telegramId);
 
-        // Skip if user is not in event creation flow
-        if (!userState || msg.text?.startsWith('/')) {
-            return;
-        }
-
-        const { step, data } = userState;
-
-        switch (step) {
-            case 'event_name':
-                data.eventName = msg.text;
-                userState.step = 'event_date';
-                userStates.set(telegramId, userState);
-                
-                await bot.sendMessage(chatId, 
-                    '📅 **Step 2: Event Date & Time**\n' +
-                    'Please send the date and time in this format:\n' +
-                    '`YYYY-MM-DD HH:MM`\n\n' +
-                    'Example: `2024-12-25 18:30`',
-                    { parse_mode: 'Markdown' }
-                );
-                break;
-
-            case 'event_date':
-                const dateInput = msg.text;
-                const eventDate = new Date(dateInput);
-                
-                if (isNaN(eventDate.getTime())) {
-                    await bot.sendMessage(chatId, 
-                        '❌ Invalid date format! Please use: `YYYY-MM-DD HH:MM`\n' +
-                        'Example: `2024-12-25 18:30`',
-                        { parse_mode: 'Markdown' }
-                    );
-                    return;
-                }
-
-                if (eventDate <= new Date()) {
-                    await bot.sendMessage(chatId, 
-                        '❌ Event date must be in the future! Please enter a valid date.'
-                    );
-                    return;
-                }
-
-                data.eventDate = eventDate.toISOString();
-                userState.step = 'stake_amount';
-                userStates.set(telegramId, userState);
-                
-                await bot.sendMessage(chatId, 
-                    '💰 **Step 3: Stake Amount**\n' +
-                    'How much ETH should participants stake to join?\n' +
-                    'Please send a number (e.g., `0.01` for 0.01 ETH):',
-                    { parse_mode: 'Markdown' }
-                );
-                break;
-
-            case 'stake_amount':
-                const stakeAmount = parseFloat(msg.text);
-                
-                if (isNaN(stakeAmount) || stakeAmount <= 0) {
-                    await bot.sendMessage(chatId, 
-                        '❌ Please enter a valid positive number for the stake amount.'
-                    );
-                    return;
-                }
-
-                data.stakeAmount = stakeAmount;
-                userState.step = 'location';
-                userStates.set(telegramId, userState);
-                
-                await bot.sendMessage(chatId, 
-                    '📍 **Step 4: Event Location**\n' +
-                    'Please send the location of your event.\n\n' +
-                    'You can either:\n' +
-                    '• Send a location via Telegram (recommended)\n' +
-                    '• Or type the address manually',
-                    { parse_mode: 'Markdown' }
-                );
-                break;
-
-            case 'location':
-                // Check if it's a location message
-                if (msg.location) {
-                    data.locationLat = msg.location.latitude;
-                    data.locationLng = msg.location.longitude;
-                    data.locationText = 'Location shared via Telegram';
-                } else {
-                    data.locationText = msg.text;
-                    data.locationLat = null;
-                    data.locationLng = null;
-                }
-
-                // Create the event
-                await bot.sendMessage(chatId, '⏳ Creating your event... Please wait.');
-                
-                try {
-                    const result = await createEvent(
-                        telegramId,
-                        data.eventName,
-                        data.eventDate,
-                        data.stakeAmount,
-                        data.locationLat,
-                        data.locationLng
-                    );
-
-                    // Get user data for display
-                    const userData = await getUserWallet(telegramId);
-
-                    const successMessage = 
-                        `🎉 **Event Created Successfully!**\n\n` +
-                        `📝 **Event Details:**\n` +
-                        `• Name: ${data.eventName}\n` +
-                        `• Date: ${new Date(data.eventDate).toLocaleString()}\n` +
-                        `• Stake: ${data.stakeAmount} ETH\n` +
-                        `• Location: ${data.locationText}\n` +
-                        `• Creator: \`${userData.wallet}\`\n\n` +
-                        `🔗 **Blockchain Info:**\n` +
-                        `• Event ID: \`${result.eventId}\`\n` +
-                        `• Transaction: \`${result.txHash}\`\n` +
-                        `• Bot Wallet: \`${result.botWallet}\`\n\n` +
-                        `✅ Your event is now live on the blockchain!`;
-
-                    await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
-
-                } catch (error) {
-                    console.error('Error creating event:', error);
-                    await bot.sendMessage(chatId, 
-                        '❌ Failed to create event. Please try again later.'
-                    );
-                }
-
-                // Clear user state
-                userStates.delete(telegramId);
-                break;
-        }
-
-    } catch (error) {
-        console.error('Error in event creation flow:', error);
-        await bot.sendMessage(msg.chat.id, 
-            '❌ Sorry, there was an error. Please try /create_event again.'
-        );
-        userStates.delete(msg.from.id);
-    }
-});
 
 // Handle /events command to list all events
 bot.onText(/\/events/, async (msg) => {
@@ -312,5 +165,311 @@ bot.onText(/\/events/, async (msg) => {
         await bot.sendMessage(msg.chat.id, 
             '❌ Sorry, there was an error retrieving events. Please try again later.'
         );
+    }
+});
+
+// Handle /join_event command
+bot.onText(/\/join_event/, async (msg) => {
+    try {
+        const chatId = msg.chat.id;
+        const telegramId = msg.from.id;
+
+        // Check if user has wallet
+        const userData = await getUserWallet(telegramId);
+        if (!userData) {
+            await bot.sendMessage(chatId, 
+                '❌ You need a wallet first! Use /create_wallet to create one.'
+            );
+            return;
+        }
+
+        // Initialize user state for event joining
+        joinStates.set(telegramId, {
+            step: 'event_name',
+            data: {}
+        });
+
+        await bot.sendMessage(chatId, 
+            '🎉 Let\'s join an event! I\'ll guide you through the process.\n\n' +
+            '📝 **Step 1: Event Name**\n' +
+            'Please send me the name of the event you want to join:',
+            { parse_mode: 'Markdown' }
+        );
+
+    } catch (error) {
+        console.error('Error starting event joining:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error. Please try again later.'
+        );
+    }
+});
+
+// Handle event joining steps
+bot.on('message', async (msg) => {
+    try {
+        const chatId = msg.chat.id;
+        const telegramId = msg.from.id;
+        const userState = userStates.get(telegramId);
+        const joinState = joinStates.get(telegramId);
+
+        // Handle event creation flow
+        if (userState && !msg.text?.startsWith('/')) {
+            const { step, data } = userState;
+
+            switch (step) {
+                case 'event_name':
+                    data.eventName = msg.text;
+                    userState.step = 'event_date';
+                    userStates.set(telegramId, userState);
+                    
+                    await bot.sendMessage(chatId, 
+                        '📅 **Step 2: Event Date & Time**\n' +
+                        'Please send the date and time in this format:\n' +
+                        '`YYYY-MM-DD HH:MM`\n\n' +
+                        'Example: `2024-12-25 18:30`',
+                        { parse_mode: 'Markdown' }
+                    );
+                    break;
+
+                case 'event_date':
+                    const dateInput = msg.text;
+                    const eventDate = new Date(dateInput);
+                    
+                    if (isNaN(eventDate.getTime())) {
+                        await bot.sendMessage(chatId, 
+                            '❌ Invalid date format! Please use: `YYYY-MM-DD HH:MM`\n' +
+                            'Example: `2024-12-25 18:30`',
+                            { parse_mode: 'Markdown' }
+                        );
+                        return;
+                    }
+
+                    if (eventDate <= new Date()) {
+                        await bot.sendMessage(chatId, 
+                            '❌ Event date must be in the future! Please enter a valid date.'
+                        );
+                        return;
+                    }
+
+                    data.eventDate = eventDate.toISOString();
+                    userState.step = 'stake_amount';
+                    userStates.set(telegramId, userState);
+                    
+                    await bot.sendMessage(chatId, 
+                        '💰 **Step 3: Stake Amount**\n' +
+                        'How much ETH should participants stake to join?\n' +
+                        'Please send a number (e.g., `0.01` for 0.01 ETH):',
+                        { parse_mode: 'Markdown' }
+                    );
+                    break;
+
+                case 'stake_amount':
+                    const stakeAmount = parseFloat(msg.text);
+                    
+                    if (isNaN(stakeAmount) || stakeAmount <= 0) {
+                        await bot.sendMessage(chatId, 
+                            '❌ Please enter a valid positive number for the stake amount.'
+                        );
+                        return;
+                    }
+
+                    data.stakeAmount = stakeAmount;
+                    userState.step = 'location';
+                    userStates.set(telegramId, userState);
+                    
+                    await bot.sendMessage(chatId, 
+                        '📍 **Step 4: Event Location**\n' +
+                        'Please send the location of your event.\n\n' +
+                        'You can either:\n' +
+                        '• Send a location via Telegram (recommended)\n' +
+                        '• Or type the address manually',
+                        { parse_mode: 'Markdown' }
+                    );
+                    break;
+
+                case 'location':
+                    // Check if it's a location message
+                    if (msg.location) {
+                        data.locationLat = msg.location.latitude;
+                        data.locationLng = msg.location.longitude;
+                        data.locationText = 'Location shared via Telegram';
+                    } else {
+                        data.locationText = msg.text;
+                        data.locationLat = null;
+                        data.locationLng = null;
+                    }
+
+                    // Create the event
+                    await bot.sendMessage(chatId, '⏳ Creating your event... Please wait.');
+                    
+                    try {
+                        const result = await createEvent(
+                            telegramId,
+                            data.eventName,
+                            data.eventDate,
+                            data.stakeAmount,
+                            data.locationLat,
+                            data.locationLng
+                        );
+
+                        // Get user data for display
+                        const userData = await getUserWallet(telegramId);
+
+                        const successMessage = 
+                            `🎉 **Event Created Successfully!**\n\n` +
+                            `📝 **Event Details:**\n` +
+                            `• Name: ${data.eventName}\n` +
+                            `• Date: ${new Date(data.eventDate).toLocaleString()}\n` +
+                            `• Stake: ${data.stakeAmount} ETH\n` +
+                            `• Location: ${data.locationText}\n` +
+                            `• Creator: \`${userData.wallet}\`\n\n` +
+                            `🔗 **Blockchain Info:**\n` +
+                            `• Event ID: \`${result.eventId}\`\n` +
+                            `• Transaction: \`${result.txHash}\`\n` +
+                            `• Bot Wallet: \`${result.botWallet}\`\n\n` +
+                            `✅ Your event is now live on the blockchain!`;
+
+                        await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
+
+                    } catch (error) {
+                        console.error('Error creating event:', error);
+                        await bot.sendMessage(chatId, 
+                            '❌ Failed to create event. Please try again later.'
+                        );
+                    }
+
+                    // Clear user state
+                    userStates.delete(telegramId);
+                    break;
+            }
+            return;
+        }
+
+        // Handle event joining flow
+        if (joinState && !msg.text?.startsWith('/')) {
+            const { step, data } = joinState;
+
+            switch (step) {
+                case 'event_name':
+                    const eventName = msg.text;
+                    const events = await getEventByName(eventName);
+                    
+                    if (events.length === 0) {
+                        await bot.sendMessage(chatId, 
+                            '❌ No events found with that name. Please try again or use /events to see available events.'
+                        );
+                        return;
+                    }
+
+                    if (events.length === 1) {
+                        // Single event found, proceed to confirmation
+                        const event = events[0];
+                        data.selectedEvent = event;
+                        joinState.step = 'confirmation';
+                        joinStates.set(telegramId, joinState);
+
+                        const eventDate = new Date(event.date).toLocaleString();
+                        const message = 
+                            `📅 **Event Found:** ${event.name}\n\n` +
+                            `📅 Date: ${eventDate}\n` +
+                            `💰 Stake Amount: ${event.stake_amount} ETH\n` +
+                            `👤 Creator: \`${event.creator}\`\n\n` +
+                            `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ETH from your wallet.\n\n` +
+                            `React with 👍 to confirm and join the event, or send "cancel" to abort.`;
+
+                        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+                    } else {
+                        // Multiple events found, show options
+                        data.eventOptions = events;
+                        joinState.step = 'select_event';
+                        joinStates.set(telegramId, joinState);
+
+                        let message = `📅 **Multiple events found:**\n\n`;
+                        events.forEach((event, index) => {
+                            const eventDate = new Date(event.date).toLocaleString();
+                            message += `${index + 1}. **${event.name}**\n`;
+                            message += `   📅 ${eventDate}\n`;
+                            message += `   💰 Stake: ${event.stake_amount} ETH\n\n`;
+                        });
+                        message += `Please send the number (1-${events.length}) of the event you want to join:`;
+
+                        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+                    }
+                    break;
+
+                case 'select_event':
+                    const selection = parseInt(msg.text);
+                    if (isNaN(selection) || selection < 1 || selection > data.eventOptions.length) {
+                        await bot.sendMessage(chatId, 
+                            `❌ Please send a number between 1 and ${data.eventOptions.length}.`
+                        );
+                        return;
+                    }
+
+                    const selectedEvent = data.eventOptions[selection - 1];
+                    data.selectedEvent = selectedEvent;
+                    joinState.step = 'confirmation';
+                    joinStates.set(telegramId, joinState);
+
+                    const eventDate = new Date(selectedEvent.date).toLocaleString();
+                    const message = 
+                        `📅 **Event Selected:** ${selectedEvent.name}\n\n` +
+                        `📅 Date: ${eventDate}\n` +
+                        `💰 Stake Amount: ${selectedEvent.stake_amount} ETH\n` +
+                        `👤 Creator: \`${selectedEvent.creator}\`\n\n` +
+                        `⚠️ **Important:** Joining this event will stake ${selectedEvent.stake_amount} ETH from your wallet.\n\n` +
+                        `React with 👍 to confirm and join the event, or send "cancel" to abort.`;
+
+                    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+                    break;
+
+                case 'confirmation':
+                    if (msg.text?.toLowerCase() === 'cancel') {
+                        await bot.sendMessage(chatId, '❌ Event joining cancelled.');
+                        joinStates.delete(telegramId);
+                        return;
+                    }
+
+                    // Check if user reacted with 👍 or sent "confirm"
+                    if (msg.text?.toLowerCase() === 'confirm' || msg.text?.toLowerCase() === 'yes') {
+                        await bot.sendMessage(chatId, '⏳ Joining event... Please wait.');
+                        
+                        try {
+                            const result = await joinEvent(telegramId, data.selectedEvent.id);
+                            
+                            const successMessage = 
+                                `🎉 **Successfully Joined Event!**\n\n` +
+                                `📅 **Event:** ${result.eventName}\n` +
+                                `💰 **Stake Paid:** ${result.stakeAmount} ETH\n` +
+                                `🔗 **Transaction:** \`${result.txHash}\`\n\n` +
+                                `✅ You are now a participant! Show up to get your stake back plus rewards!`;
+
+                            await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
+
+                        } catch (error) {
+                            console.error('Error joining event:', error);
+                            await bot.sendMessage(chatId, 
+                                `❌ Failed to join event: ${error.message}`
+                            );
+                        }
+
+                        // Clear join state
+                        joinStates.delete(telegramId);
+                    } else {
+                        await bot.sendMessage(chatId, 
+                            '❌ Please send "confirm" to join the event or "cancel" to abort.'
+                        );
+                    }
+                    break;
+            }
+        }
+
+    } catch (error) {
+        console.error('Error in event flow:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error. Please try again.'
+        );
+        userStates.delete(msg.from.id);
+        joinStates.delete(msg.from.id);
     }
 });

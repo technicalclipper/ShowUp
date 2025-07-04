@@ -171,10 +171,154 @@ async function getEvents() {
     }
 }
 
+// Get event by name
+async function getEventByName(eventName) {
+    try {
+        const { data, error } = await supabase
+            .from('events')
+            .select('*')
+            .ilike('name', `%${eventName}%`)
+            .eq('finalized', false)
+            .order('date', { ascending: true });
+
+        if (error) {
+            console.error('Database error:', error);
+            throw error;
+        }
+
+        return data;
+    } catch (error) {
+        console.error('Error getting event by name:', error);
+        throw error;
+    }
+}
+
+// Get event by ID
+async function getEventById(eventId) {
+    try {
+        const { data, error } = await supabase
+            .from('events')
+            .select('*')
+            .eq('id', eventId)
+            .single();
+
+        if (error) {
+            console.error('Database error:', error);
+            throw error;
+        }
+
+        return data;
+    } catch (error) {
+        console.error('Error getting event by ID:', error);
+        throw error;
+    }
+}
+
+// Join event on blockchain and database
+async function joinEvent(telegramId, eventId) {
+    try {
+        // Check if Supabase is initialized
+        if (!supabase) {
+            throw new Error('Supabase client not initialized');
+        }
+
+        // Get user wallet
+        const userData = await getUserWallet(telegramId);
+        if (!userData) {
+            throw new Error('User wallet not found');
+        }
+
+        // Get event details
+        const eventData = await getEventById(eventId);
+        if (!eventData) {
+            throw new Error('Event not found');
+        }
+
+        if (eventData.finalized) {
+            throw new Error('Event is already finalized');
+        }
+
+        // Check if user already joined
+        const { data: existingParticipant } = await supabase
+            .from('participants')
+            .select('*')
+            .eq('event_id', eventId)
+            .eq('wallet', userData.wallet)
+            .single();
+
+        if (existingParticipant) {
+            throw new Error('You have already joined this event');
+        }
+
+        // Convert stake amount to Wei
+        const stakeAmountWei = ethers.parseEther(eventData.stake_amount.toString());
+
+        // Get user's private key from database
+        const { data: userPrivateKey } = await supabase
+            .from('users')
+            .select('private_key')
+            .eq('telegram_id', telegramId.toString())
+            .single();
+
+        if (!userPrivateKey) {
+            throw new Error('User private key not found');
+        }
+
+        // Create wallet instance with user's private key
+        const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || 'https://sepolia.base.org');
+        const userWallet = new ethers.Wallet(userPrivateKey.private_key, provider);
+        
+        // Create contract instance with user's wallet
+        const contract = new ethers.Contract(
+            process.env.CONTRACT_ADDRESS,
+            require('./config').CONTRACT_ABI,
+            userWallet
+        );
+
+        // Call contract function to join event
+        const tx = await contract.joinEvent(eventId, { value: stakeAmountWei });
+        const receipt = await tx.wait();
+
+        // Save participant to database
+        const participantData = {
+            event_id: eventId,
+            wallet: userData.wallet,
+            telegram_id: telegramId.toString(),
+            has_staked: true,
+            attended: false
+        };
+
+        const { data, error } = await supabase
+            .from('participants')
+            .insert([participantData])
+            .select();
+
+        if (error) {
+            console.error('Database error:', error);
+            throw new Error('Failed to save participant to database');
+        }
+
+        return {
+            eventId: eventId.toString(),
+            txHash: receipt.hash,
+            participantData: data[0],
+            eventName: eventData.name,
+            stakeAmount: eventData.stake_amount
+        };
+
+    } catch (error) {
+        console.error('Error joining event:', error);
+        throw error;
+    }
+}
+
 module.exports = {
     createWallet,
     getUserWallet,
     getWalletBalance,
     createEvent,
-    getEvents
+    getEvents,
+    getEventByName,
+    getEventById,
+    joinEvent
 };
