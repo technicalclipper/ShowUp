@@ -299,7 +299,7 @@ async function joinEvent(telegramId, eventId) {
         }
 
         // Create wallet instance with user's private key
-        const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || 'https://sepolia.base.org');
+        const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
         const userWallet = new ethers.Wallet(userPrivateKey.private_key, provider);
         
         // Create contract instance with user's wallet

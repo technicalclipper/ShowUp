@@ -11,6 +11,18 @@ const token = process.env.token;
 // Create a bot that uses 'polling' to fetch new updates
 const bot = new TelegramBot(token, { polling: true });
 
+// Global helper function to escape special characters in wallet addresses for Markdown
+const escapeWalletAddress = (address) => {
+    if (!address) return '';
+    return address.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&').replace(/[<>]/g, '\\$&');
+};
+
+// Global helper function to escape special characters in text for Markdown
+const escapeMarkdown = (text) => {
+    if (!text) return '';
+    return text.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&').replace(/[<>]/g, '\\$&');
+};
+
 // Handle /create_wallet command
 bot.onText(/\/create_wallet/, async (msg) => {
     try {
@@ -26,7 +38,7 @@ bot.onText(/\/create_wallet/, async (msg) => {
         if (existingUser) {
             await bot.sendMessage(chatId, 
                 `You already have a wallet! 🎉\n\n` +
-                `Wallet Address: \`${existingUser.wallet}\`\n` +
+                `Wallet Address: \`${escapeWalletAddress(existingUser.wallet)}\`\n` +
                 `Name: ${existingUser.telegram_name}\n\n` +
                 `Use /wallet to view your wallet details.`, 
                 { parse_mode: 'Markdown' }
@@ -41,7 +53,7 @@ bot.onText(/\/create_wallet/, async (msg) => {
         const message = 
             `🎉 Wallet created successfully!\n\n` +
             `👤 Name: ${telegramName}\n` +
-            `🔑 Wallet Address: \`${walletData.address}\`\n` +
+            `🔑 Wallet Address: \`${escapeWalletAddress(walletData.address)}\`\n` +
             `📱 Telegram ID: ${telegramId}\n\n` +
             `Your wallet is now ready to use! You can:\n` +
             `• Join events with /join_event\n` +
@@ -79,7 +91,7 @@ bot.onText(/\/wallet/, async (msg) => {
         const message = 
             `💰 Your Wallet Details\n\n` +
             `👤 Name: ${userData.telegram_name}\n` +
-            `🔑 Address: \`${userData.wallet}\`\n` +
+            `🔑 Address: \`${escapeWalletAddress(userData.wallet)}\`\n` +
             `📱 Telegram ID: ${telegramId}\n` +
             `💎 Balance: ${balance} ETH`;
 
@@ -149,11 +161,6 @@ bot.onText(/\/events/, async (msg) => {
         
         let message = '';
 
-        // Helper function to escape special characters in wallet addresses
-        const escapeWalletAddress = (address) => {
-            return address.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
-        };
-
         // Show available events (events not joined by user)
         const availableEvents = allEvents.filter(event => 
             !joinedEvents.some(joined => joined.events.id === event.id)
@@ -165,7 +172,8 @@ bot.onText(/\/events/, async (msg) => {
             availableEvents.forEach((event, index) => {
                 const eventDate = new Date(event.date).toLocaleString();
                 const escapedCreator = escapeWalletAddress(event.creator);
-                message += `${index + 1}. **${event.name}**\n`;
+                const escapedName = escapeMarkdown(event.name);
+                message += `${index + 1}. **${escapedName}**\n`;
                 message += `   📅 ${eventDate}\n`;
                 message += `   💰 Stake: ${event.stake_amount} ETH\n`;
                 message += `   👤 Creator: \`${escapedCreator}\`\n`;
@@ -183,7 +191,8 @@ bot.onText(/\/events/, async (msg) => {
                 const event = joined.events;
                 const eventDate = new Date(event.date).toLocaleString();
                 const escapedCreator = escapeWalletAddress(event.creator);
-                message += `${index + 1}. **${event.name}**\n`;
+                const escapedName = escapeMarkdown(event.name);
+                message += `${index + 1}. **${escapedName}**\n`;
                 message += `   📅 ${eventDate}\n`;
                 message += `   💰 Stake: ${event.stake_amount} ETH\n`;
                 message += `   👤 Creator: \`${escapedCreator}\`\n`;
@@ -205,7 +214,22 @@ bot.onText(/\/events/, async (msg) => {
             message += '• Show up to events to get your stake back + rewards!';
         }
 
-        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        // Debug: Log the message to see what's being sent
+        console.log('Events message length:', message.length);
+        console.log('Events message preview:', message.substring(0, 200) + '...');
+        
+        // Try without Markdown first to see if the issue is with parsing
+        try {
+            await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        } catch (markdownError) {
+            console.error('Markdown parsing failed, trying without Markdown:', markdownError.message);
+            // Remove Markdown formatting and send as plain text
+            const plainMessage = message
+                .replace(/\*\*/g, '') // Remove bold
+                .replace(/`/g, '') // Remove code blocks
+                .replace(/\\/g, ''); // Remove escape characters
+            await bot.sendMessage(chatId, plainMessage);
+        }
 
     } catch (error) {
         console.error('Error listing events:', error);
@@ -359,22 +383,22 @@ bot.on('message', async (msg) => {
                             data.locationLng
                         );
 
-                        // Get user data for display
-                        const userData = await getUserWallet(telegramId);
+                                            // Get user data for display
+                    const userData = await getUserWallet(telegramId);
 
-                        const successMessage = 
-                            `🎉 **Event Created Successfully!**\n\n` +
-                            `📝 **Event Details:**\n` +
-                            `• Name: ${data.eventName}\n` +
-                            `• Date: ${new Date(data.eventDate).toLocaleString()}\n` +
-                            `• Stake: ${data.stakeAmount} ETH\n` +
-                            `• Location: ${data.locationText}\n` +
-                            `• Creator: \`${userData.wallet}\`\n\n` +
-                            `🔗 **Blockchain Info:**\n` +
-                            `• Event ID: \`${result.eventId}\`\n` +
-                            `• Transaction: \`${result.txHash}\`\n` +
-                            `• Bot Wallet: \`${result.botWallet}\`\n\n` +
-                            `✅ Your event is now live on the blockchain!`;
+                    const successMessage = 
+                        `🎉 **Event Created Successfully!**\n\n` +
+                        `📝 **Event Details:**\n` +
+                        `• Name: ${data.eventName}\n` +
+                        `• Date: ${new Date(data.eventDate).toLocaleString()}\n` +
+                        `• Stake: ${data.stakeAmount} ETH\n` +
+                        `• Location: ${data.locationText}\n` +
+                        `• Creator: \`${escapeWalletAddress(userData.wallet)}\`\n\n` +
+                        `🔗 **Blockchain Info:**\n` +
+                        `• Event ID: \`${result.eventId}\`\n` +
+                        `• Transaction: \`${escapeWalletAddress(result.txHash)}\`\n` +
+                        `• Bot Wallet: \`${escapeWalletAddress(result.botWallet)}\`\n\n` +
+                        `✅ Your event is now live on the blockchain!`;
 
                         await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
 
@@ -416,11 +440,12 @@ bot.on('message', async (msg) => {
                         joinStates.set(telegramId, joinState);
 
                         const eventDate = new Date(event.date).toLocaleString();
+
                         const message = 
                             `📅 **Event Found:** ${event.name}\n\n` +
                             `📅 Date: ${eventDate}\n` +
                             `💰 Stake Amount: ${event.stake_amount} ETH\n` +
-                            `👤 Creator: \`${event.creator}\`\n\n` +
+                            `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
                             `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ETH from your wallet.\n\n` +
                             `Click the button below to confirm:`;
 
@@ -480,11 +505,12 @@ bot.on('message', async (msg) => {
                     joinStates.set(telegramId, joinState);
 
                     const eventDate = new Date(selectedEvent.date).toLocaleString();
+
                     const message = 
                         `📅 **Event Selected:** ${selectedEvent.name}\n\n` +
                         `📅 Date: ${eventDate}\n` +
                         `💰 Stake Amount: ${selectedEvent.stake_amount} ETH\n` +
-                        `👤 Creator: \`${selectedEvent.creator}\`\n\n` +
+                        `👤 Creator: \`${escapeWalletAddress(selectedEvent.creator)}\`\n\n` +
                         `⚠️ **Important:** Joining this event will stake ${selectedEvent.stake_amount} ETH from your wallet.\n\n` +
                         `Click the button below to confirm:`;
 
@@ -543,11 +569,12 @@ bot.on('callback_query', async (callbackQuery) => {
             }
 
             const eventDate = new Date(event.date).toLocaleString();
+
             const message = 
                 `📅 **Event Selected:** ${event.name}\n\n` +
                 `📅 Date: ${eventDate}\n` +
                 `💰 Stake Amount: ${event.stake_amount} ETH\n` +
-                `👤 Creator: \`${event.creator}\`\n\n` +
+                `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
                 `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ETH from your wallet.\n\n` +
                 `Click the button below to confirm:`;
 
