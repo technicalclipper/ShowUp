@@ -44,4 +44,15 @@ create table memory_posters (
 );
 
 
+create table users (
+  wallet text primary key,
+  telegram_id text not null,
+  telegram_name text,
+  ens_name text,
+  private_key text, -- ⚠️ Store carefully (plaintext only for hackathon)
+  created_at timestamptz default now(),
+  last_active timestamptz default now()
+);
+
+
 
