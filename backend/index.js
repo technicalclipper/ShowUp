@@ -282,3 +282,35 @@ bot.on('message', async (msg) => {
     }
 });
 
+// Handle /events command to list all events
+bot.onText(/\/events/, async (msg) => {
+    try {
+        const chatId = msg.chat.id;
+        
+        const events = await getEvents();
+        
+        if (events.length === 0) {
+            await bot.sendMessage(chatId, '📅 No events found. Create one with /create_event!');
+            return;
+        }
+
+        let message = '📅 **Available Events:**\n\n';
+        
+        events.forEach((event, index) => {
+            const eventDate = new Date(event.date).toLocaleString();
+            message += `${index + 1}. **${event.name}**\n`;
+            message += `   📅 ${eventDate}\n`;
+            message += `   💰 Stake: ${event.stake_amount} ETH\n`;
+            message += `   👤 Creator: \`${event.creator}\`\n`;
+            message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
+        });
+
+        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+
+    } catch (error) {
+        console.error('Error listing events:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error retrieving events. Please try again later.'
+        );
+    }
+});
