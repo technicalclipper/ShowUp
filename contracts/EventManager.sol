@@ -39,6 +39,20 @@ contract ShowUpEvent {
         return eventCount;
     }
 
+ function joinEvent(uint256 eventId) external payable {
+        Event storage e = events[eventId];
+        require(!e.finalized, "Already finalized");
+        require(!e.hasStaked[msg.sender], "Already joined");
+        require(msg.value == e.stakeAmount, "Incorrect stake");
+
+        e.participants.push(msg.sender);
+        e.hasStaked[msg.sender] = true;
+
+        emit Joined(eventId, msg.sender);
+    }
+
+   
+
     
 
     // Fallback to receive ETH
