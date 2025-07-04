@@ -60,7 +60,37 @@ contract ShowUpEvent {
         emit AttendanceMarked(eventId, user);
     }
 
-    
+    function finalizeEvent(uint256 eventId) external onlyCreator(eventId) {
+        Event storage e = events[eventId];
+        require(!e.finalized, "Already finalized");
+
+        uint256 totalPool = e.stakeAmount * e.participants.length;
+        uint256 attendeeCount = 0;
+
+        // Count attendees
+        for (uint i = 0; i < e.participants.length; i++) {
+            if (e.attended[e.participants[i]]) {
+                attendeeCount++;
+            }
+        }
+
+        require(attendeeCount > 0, "No one showed up!");
+
+        uint256 rewardPerUser = totalPool / attendeeCount;
+
+        // Distribute funds to attendees
+        for (uint i = 0; i < e.participants.length; i++) {
+            address user = e.participants[i];
+            if (e.attended[user]) {
+                (bool sent, ) = user.call{value: rewardPerUser}("");
+                require(sent, "Failed to send reward");
+            }
+        }
+
+        e.finalized = true;
+        emit Finalized(eventId);
+    }
+   
 
     
 
