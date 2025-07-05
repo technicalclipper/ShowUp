@@ -943,7 +943,8 @@ bot.onText(/\/help/, async (msg) => {
             `• /end_event - End your created events (creators only)\n` +
             `• /event_summary - View detailed summaries of finalized events\n\n` +
             `**Memories:**\n` +
-            `• /create_memory - Create AI-enhanced memory posters with photos for events\n\n` +
+            `• /create_memory - Create AI-enhanced memory posters with photos for events\n` +
+            `• /show_memory - View memories for finalized events\n\n` +
             `**Analytics:**\n` +
             `• /stats - View your personal statistics and achievements\n\n` +
             `**How it works:**\n` +
@@ -1316,6 +1317,103 @@ bot.onText(/\/stats/, async (msg) => {
     }
 });
 
+// Handle /show_memory command (show memories for finalized events)
+bot.onText(/\/show_memory/, async (msg) => {
+    try {
+        const chatId = msg.chat.id;
+        const telegramId = msg.from.id;
+
+        // Check if user has wallet
+        const userData = await getUserWallet(telegramId);
+        if (!userData) {
+            await bot.sendMessage(chatId, 
+                '❌ You need a wallet first! Use /create_wallet to create one.'
+            );
+            return;
+        }
+
+        // Get all finalized events that have memories
+        const supabase = require('./model');
+        const { data: finalizedEvents, error } = await supabase
+            .from('events')
+            .select(`
+                id,
+                name,
+                date,
+                stake_amount,
+                creator,
+                finalized,
+                memory_posters (
+                    id,
+                    image_url,
+                    blob_id
+                )
+            `)
+            .eq('finalized', true)
+            .not('memory_posters', 'is', null)
+            .order('date', { ascending: false });
+
+        if (error) {
+            console.error('Database error:', error);
+            await bot.sendMessage(chatId, 
+                '❌ Sorry, there was an error retrieving memories. Please try again later.'
+            );
+            return;
+        }
+
+        if (!finalizedEvents || finalizedEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ No memories found for finalized events. Create some memories first with /create_memory!'
+            );
+            return;
+        }
+
+        // Filter events that actually have memory posters
+        const eventsWithMemories = finalizedEvents.filter(event => 
+            event.memory_posters && event.memory_posters.length > 0
+        );
+
+        if (eventsWithMemories.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ No memories found for finalized events. Create some memories first with /create_memory!'
+            );
+            return;
+        }
+
+        // Show list of finalized events with memories
+        let message = '📸 **Event Memories**\n\n';
+        message += 'Choose an event to view its memories:\n\n';
+        
+        eventsWithMemories.forEach((event, index) => {
+            const eventDate = new Date(event.date).toLocaleString();
+            const escapedName = escapeMarkdown(event.name);
+            const memoryCount = event.memory_posters.length;
+            message += `${index + 1}. **${escapedName}**\n`;
+            message += `   📅 ${eventDate}\n`;
+            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
+            message += `   📸 Memories: ${memoryCount}\n\n`;
+        });
+
+        // Create inline keyboard with event options
+        const keyboard = eventsWithMemories.map((event, index) => [
+            { text: `${index + 1}. ${event.name}`, callback_data: `show_memory_${event.id}` }
+        ]);
+
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: keyboard
+            }
+        });
+
+    } catch (error) {
+        console.error('Error listing events for memory viewing:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error. Please try again later.'
+        );
+    }
+});
+
 // Handle /create_memory command (create memories for events)
 bot.onText(/\/create_memory/, async (msg) => {
     try {
@@ -1682,6 +1780,176 @@ bot.on('callback_query', async (callbackQuery) => {
         }
 
 
+
+        if (data.startsWith('show_memory_')) {
+            const eventId = parseInt(data.replace('show_memory_', ''));
+            
+            try {
+                // Get event details and its memories
+                const supabase = require('./model');
+                const { data: eventWithMemories, error } = await supabase
+                    .from('events')
+                    .select(`
+                        id,
+                        name,
+                        date,
+                        stake_amount,
+                        creator,
+                        finalized,
+                        memory_posters (
+                            id,
+                            image_url,
+                            blob_id,
+                            created_at
+                        )
+                    `)
+                    .eq('id', eventId)
+                    .eq('finalized', true)
+                    .single();
+
+                if (error || !eventWithMemories) {
+                    await bot.sendMessage(chatId, '❌ Event not found or not finalized. Please try again.');
+                    return;
+                }
+
+                if (!eventWithMemories.memory_posters || eventWithMemories.memory_posters.length === 0) {
+                    await bot.sendMessage(chatId, '❌ No memories found for this event.');
+                    return;
+                }
+
+                const event = eventWithMemories;
+                const eventDate = new Date(event.date).toLocaleString();
+                const escapedName = escapeMarkdown(event.name);
+                const escapedCreator = escapeWalletAddress(event.creator);
+
+                // Send event info first
+                const eventInfo = 
+                    `📸 **Memories for:** ${escapedName}\n\n` +
+                    `📅 Date: ${eventDate}\n` +
+                    `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
+                    `👤 Creator: \`${escapedCreator}\`\n` +
+                    `📸 Total Memories: ${event.memory_posters.length}\n\n` +
+                    `🔄 Loading memories...`;
+
+                await bot.sendMessage(chatId, eventInfo, { parse_mode: 'Markdown' });
+
+                // Prepare media group for all memories using temporary files
+                const mediaGroup = [];
+                const tempFiles = [];
+                const { retrieveFileFromWalrus } = require('./walrus');
+                
+                for (let i = 0; i < event.memory_posters.length; i++) {
+                    const memory = event.memory_posters[i];
+                    const memoryDate = new Date(memory.created_at).toLocaleString();
+                    
+                    try {
+                        // Try to get image buffer from Walrus
+                        const imageBuffer = await retrieveFileFromWalrus(memory.blob_id);
+                        
+                        // Create temporary file for media group
+                        const tempFilePath = path.join(__dirname, `temp_memory_${memory.blob_id}.jpg`);
+                        fs.writeFileSync(tempFilePath, imageBuffer);
+                        tempFiles.push(tempFilePath);
+                        
+                        // Create media object for node-telegram-bot-api
+                        const mediaObject = {
+                            type: 'photo',
+                            media: fs.createReadStream(tempFilePath),
+                            caption: i === 0 ? 
+                                `📸 **Memories for:** ${escapedName}\n\n` +
+                                `📅 Date: ${eventDate}\n` +
+                                `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
+                                `👤 Creator: \`${escapedCreator}\`\n` +
+                                `📸 Total Memories: ${event.memory_posters.length}\n\n` +
+                                `📸 **Memory ${i + 1}/${event.memory_posters.length}**\n` +
+                                `📅 Created: ${memoryDate}\n` +
+                                `🔗 Walrus ID: \`${memory.blob_id}\`` : 
+                                `📸 **Memory ${i + 1}/${event.memory_posters.length}**\n` +
+                                `📅 Created: ${memoryDate}\n` +
+                                `🔗 Walrus ID: \`${memory.blob_id}\``,
+                            parse_mode: 'Markdown'
+                        };
+                        
+                        mediaGroup.push(mediaObject);
+                    } catch (error) {
+                        console.error(`Failed to retrieve memory ${i + 1}:`, error.message);
+                        
+                        // Skip failed memories instead of adding error placeholders
+                        continue;
+                    }
+                }
+
+                // Send all memories as a media group (slider)
+                if (mediaGroup.length > 0) {
+                    try {
+                        console.log(`Sending media group with ${mediaGroup.length} photos`);
+                        await bot.sendMediaGroup(chatId, mediaGroup);
+                        
+                        // Clean up temporary files after successful send
+                        tempFiles.forEach(tempFile => {
+                            try {
+                                fs.unlinkSync(tempFile);
+                            } catch (cleanupError) {
+                                console.error('Error cleaning up temp file:', cleanupError.message);
+                            }
+                        });
+                    } catch (mediaGroupError) {
+                        console.error('Failed to send media group:', mediaGroupError.message);
+                        console.error('Media group error details:', JSON.stringify(mediaGroupError, null, 2));
+                        
+                        // Clean up temporary files
+                        tempFiles.forEach(tempFile => {
+                            try {
+                                fs.unlinkSync(tempFile);
+                            } catch (cleanupError) {
+                                console.error('Error cleaning up temp file:', cleanupError.message);
+                            }
+                        });
+                        
+                        // Fallback: send individual photos if media group fails
+                        await bot.sendMessage(chatId, '⚠️ Sending memories individually due to media group error...');
+                        
+                        for (let i = 0; i < event.memory_posters.length; i++) {
+                            const memory = event.memory_posters[i];
+                            const memoryDate = new Date(memory.created_at).toLocaleString();
+                            
+                            try {
+                                const imageBuffer = await retrieveFileFromWalrus(memory.blob_id);
+                                const caption = 
+                                    `📸 **Memory ${i + 1}/${event.memory_posters.length}**\n\n` +
+                                    `📅 Event: ${escapedName}\n` +
+                                    `📅 Created: ${memoryDate}\n` +
+                                    `🔗 Walrus ID: \`${memory.blob_id}\``;
+                                
+                                await bot.sendPhoto(chatId, imageBuffer, {
+                                    caption: caption,
+                                    parse_mode: 'Markdown'
+                                });
+                                
+                                // Small delay between individual photos
+                                if (i < event.memory_posters.length - 1) {
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+                                }
+                            } catch (individualError) {
+                                console.error(`Failed to send individual photo ${i + 1}:`, individualError.message);
+                                await bot.sendMessage(chatId, 
+                                    `❌ Failed to send memory ${i + 1}: ${individualError.message}`
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    await bot.sendMessage(chatId, '❌ No memories could be loaded. Please try again.');
+                }
+
+            } catch (error) {
+                console.error('Error showing memories:', error);
+                await bot.sendMessage(chatId, 
+                    `❌ Failed to show memories: ${error.message}`
+                );
+            }
+            return;
+        }
 
         if (data.startsWith('create_memory_')) {
             const eventId = parseInt(data.replace('create_memory_', ''));
