@@ -163,12 +163,30 @@ The overall design should capture the joy and excitement of group travel memorie
         const enhancedImagePath = path.join(__dirname, 'enhanced_image.png');
         fs.writeFileSync(enhancedImagePath, image_bytes);
         
-        // For now, we'll use the original file ID to send the image back
-        // In a production environment, you might want to upload this to a cloud storage service
+        // Compress the image before uploading to Walrus
+        const sharp = require('sharp');
+        
+        // Compress image using sharp
+        const compressedImagePath = path.join(__dirname, 'compressed_image.jpg');
+        await sharp(enhancedImagePath)
+            .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 80 })
+            .toFile(compressedImagePath);
+        
+        // Upload the compressed image to Walrus
+        const { uploadFileToWalrus, getWalrusUrl } = require('./walrus');
+        const blobId = await uploadFileToWalrus(compressedImagePath, { epochs: 10 }); // Store for 10 epochs
+        
+        // Clean up temporary files
+        fs.unlinkSync(enhancedImagePath);
+        fs.unlinkSync(compressedImagePath);
+        
         return {
             type: 'enhanced',
-            filePath: enhancedImagePath,
-            message: '✨ Your photo has been transformed into a beautiful AI-enhanced memory poster!'
+            blobId: blobId,
+            walrusUrl: getWalrusUrl(blobId),
+            imageBuffer: image_bytes, // Keep original for immediate sending
+            message: '✨ Your photo has been transformed into a beautiful AI-enhanced memory poster and stored on Walrus!'
         };
 
     } catch (error) {
@@ -687,13 +705,14 @@ bot.on('message', async (msg) => {
                             // Create memory poster (currently returns original image)
                             const result = await createMemoryPoster(photo.file_id, event.name, event.date);
                             
-                            // Save memory to database
+                            // Save memory to database with Walrus blob ID
                             const supabase = require('./model');
                             const { data: memoryData, error: memoryError } = await supabase
                                 .from('memory_posters')
                                 .insert([{
                                     event_id: event.id,
-                                    image_url: `file://${result.filePath}`, // Store file path for now
+                                    image_url: result.walrusUrl,
+                                    blob_id: result.blobId,
                                     created_at: new Date().toISOString()
                                 }])
                                 .select();
@@ -712,8 +731,8 @@ bot.on('message', async (msg) => {
                                 `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
                                 `✨ ${result.message}`;
 
-                            // Send the enhanced image from file
-                            await bot.sendPhoto(chatId, result.filePath, {
+                            // Send the enhanced image using buffer
+                            await bot.sendPhoto(chatId, result.imageBuffer, {
                                 caption: successMessage,
                                 parse_mode: 'Markdown'
                             });
@@ -721,13 +740,42 @@ bot.on('message', async (msg) => {
                         } catch (apiError) {
                             console.error('Error creating enhanced memory poster:', apiError);
                             
-                            // Fallback: save original photo if OpenAI API fails
+                            // Fallback: save original photo to Walrus if OpenAI API fails
+                            const { uploadFileToWalrus, getWalrusUrl } = require('./walrus');
+                            
+                            // Get original photo from Telegram
+                            const fileInfo = await bot.getFile(photo.file_id);
+                            const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+                            const response = await fetch(fileUrl);
+                            const imageBuffer = await response.arrayBuffer();
+                            
+                            // Save to temporary file
+                            const tempImagePath = path.join(__dirname, 'temp_original.png');
+                            fs.writeFileSync(tempImagePath, Buffer.from(imageBuffer));
+                            
+                            // Compress image before uploading to Walrus
+                            const sharp = require('sharp');
+                            const compressedImagePath = path.join(__dirname, 'temp_compressed.jpg');
+                            await sharp(tempImagePath)
+                                .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+                                .jpeg({ quality: 80 })
+                                .toFile(compressedImagePath);
+                            
+                            // Upload compressed image to Walrus
+                            const blobId = await uploadFileToWalrus(compressedImagePath, { epochs: 10 });
+                            const walrusUrl = getWalrusUrl(blobId);
+                            
+                            // Clean up
+                            fs.unlinkSync(tempImagePath);
+                            fs.unlinkSync(compressedImagePath);
+                            
                             const supabase = require('./model');
                             const { data: memoryData, error: memoryError } = await supabase
                                 .from('memory_posters')
                                 .insert([{
                                     event_id: event.id,
-                                    image_url: `https://api.telegram.org/file/bot${token}/${photo.file_id}`,
+                                    image_url: walrusUrl,
+                                    blob_id: blobId,
                                     created_at: new Date().toISOString()
                                 }])
                                 .select();
@@ -746,7 +794,7 @@ bot.on('message', async (msg) => {
                                 `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
                                 `⚠️ AI enhancement failed, but your original photo has been saved as a memory.`;
 
-                            await bot.sendPhoto(chatId, photo.file_id, {
+                            await bot.sendPhoto(chatId, Buffer.from(imageBuffer), {
                                 caption: fallbackMessage,
                                 parse_mode: 'Markdown'
                             });
