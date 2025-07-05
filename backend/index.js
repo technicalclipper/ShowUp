@@ -833,143 +833,8 @@ bot.on('message', async (msg) => {
             return;
         }
 
-        // Handle memory creation flow (photo upload)
-        const memoryState = memoryStates.get(telegramId);
-        if (memoryState && !msg.text?.startsWith('/')) {
-            try {
-                const { step, data } = memoryState;
-
-                if (step === 'photo_upload') {
-                    // Check if it's a photo message
-                    if (msg.photo && msg.photo.length > 0) {
-                        const photo = msg.photo[msg.photo.length - 1]; // Get the highest quality photo
-                        const caption = msg.caption || '';
-                        
-                        // Get event details
-                        const event = data.selectedEvent;
-                        
-                        // Send processing message
-                        await bot.sendMessage(chatId, 
-                            '🎨 **Creating your memory poster...**\n\n' +
-                            '⏳ Please wait while I enhance your photo with AI magic!'
-                        );
-                        
-                        try {
-                            // Create memory poster (currently returns original image)
-                            const result = await createMemoryPoster(photo.file_id, event.name, event.date);
-                            
-                            // Save memory to database with Walrus blob ID
-                            const supabase = require('./model');
-                            const { data: memoryData, error: memoryError } = await supabase
-                                .from('memory_posters')
-                                .insert([{
-                                    event_id: event.id,
-                                    image_url: result.walrusUrl,
-                                    blob_id: result.blobId,
-                                    created_at: new Date().toISOString()
-                                }])
-                                .select();
-
-                            if (memoryError) {
-                                console.error('Database error saving memory:', memoryError);
-                                throw new Error('Failed to save memory to database');
-                            }
-
-                            // Send success message
-                            const successMessage = 
-                                `🎨 **AI-Enhanced Memory Poster Created!**\n\n` +
-                                `📅 **Event:** ${escapeMarkdown(event.name)}\n` +
-                                `📅 Date: ${new Date(event.date).toLocaleString()}\n` +
-                                `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
-                                `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
-                                `✨ ${result.message}`;
-
-                            // Send the enhanced image using buffer
-                            await bot.sendPhoto(chatId, result.imageBuffer, {
-                                caption: successMessage,
-                                parse_mode: 'Markdown'
-                            });
-                            
-                        } catch (apiError) {
-                            console.error('Error creating enhanced memory poster:', apiError);
-                            
-                            // Fallback: save original photo to Walrus if OpenAI API fails
-                            const { uploadFileToWalrus, getWalrusUrl } = require('./walrus');
-                            
-                            // Get original photo from Telegram
-                            const fileInfo = await bot.getFile(photo.file_id);
-                            const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
-                            const response = await fetch(fileUrl);
-                            const imageBuffer = await response.arrayBuffer();
-                            
-                            // Save to temporary file
-                            const tempImagePath = path.join(__dirname, 'temp_original.png');
-                            fs.writeFileSync(tempImagePath, Buffer.from(imageBuffer));
-                            
-                            // Compress image before uploading to Walrus
-                            const sharp = require('sharp');
-                            const compressedImagePath = path.join(__dirname, 'temp_compressed.jpg');
-                            await sharp(tempImagePath)
-                                .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-                                .jpeg({ quality: 80 })
-                                .toFile(compressedImagePath);
-                            
-                            // Upload compressed image to Walrus
-                            const blobId = await uploadFileToWalrus(compressedImagePath, { epochs: 10 });
-                            const walrusUrl = getWalrusUrl(blobId);
-                            
-                            // Clean up
-                            fs.unlinkSync(tempImagePath);
-                            fs.unlinkSync(compressedImagePath);
-                            
-                            const supabase = require('./model');
-                            const { data: memoryData, error: memoryError } = await supabase
-                                .from('memory_posters')
-                                .insert([{
-                                    event_id: event.id,
-                                    image_url: walrusUrl,
-                                    blob_id: blobId,
-                                    created_at: new Date().toISOString()
-                                }])
-                                .select();
-
-                            if (memoryError) {
-                                console.error('Database error saving memory:', memoryError);
-                                throw new Error('Failed to save memory to database');
-                            }
-
-                            // Send fallback message with original photo
-                            const fallbackMessage = 
-                                `📸 **Memory Saved (Original Photo)**\n\n` +
-                                `📅 **Event:** ${escapeMarkdown(event.name)}\n` +
-                                `📅 Date: ${new Date(event.date).toLocaleString()}\n` +
-                                `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
-                                `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
-                                `⚠️ AI enhancement failed, but your original photo has been saved as a memory.`;
-
-                            await bot.sendPhoto(chatId, Buffer.from(imageBuffer), {
-                                caption: fallbackMessage,
-                                parse_mode: 'Markdown'
-                            });
-                        }
-                        
-                        // Clear memory state
-                        memoryStates.delete(telegramId);
-                    } else {
-                        await bot.sendMessage(chatId, 
-                            '❌ Please send a photo using the 📎 attachment button and selecting "Photo".'
-                        );
-                    }
-                }
-            } catch (error) {
-                console.error('Error in memory creation flow:', error);
-                await bot.sendMessage(chatId, 
-                    '❌ Sorry, there was an error processing your photo. Please try again.'
-                );
-                memoryStates.delete(telegramId);
-            }
-            return;
-        }
+        // Handle memory creation flow (photo upload) - REMOVED since we have dedicated photo handler
+        // Photo handling is now done in the dedicated bot.on('photo', ...) handler
 
         // Handle attendance confirmation flow (location sharing)
         const attendanceState = attendanceStates.get(telegramId);
@@ -1332,7 +1197,7 @@ bot.onText(/\/help/, async (msg) => {
             `• /create_event - Create a new event\n` +
             `• /events - List all available and joined events\n` +
             `• /join_event - Join an existing event\n` +
-            `• /confirm_attendance - View your joined events and attendance status\n` +
+            `• /confirm_attendance - Confirm your attendance at events\n` +
             `• /end_event - End your created events (creators only)\n` +
             `• /event_summary - View detailed summaries of finalized events\n\n` +
             `**Memories:**\n` +
@@ -1343,11 +1208,17 @@ bot.onText(/\/help/, async (msg) => {
             `**How it works:**\n` +
             `1. Create a wallet with /create_wallet\n` +
             `2. Create events with /create_event or join existing ones with /join_event\n` +
-            `3. Use /confirm_attendance to view your joined events\n` +
+            `3. Use /confirm_attendance to confirm your attendance at events\n` +
             `4. Show up to events to get your stake back plus rewards!\n` +
             `5. Use /event_summary to view detailed attendance reports\n` +
             `6. Check your progress with /stats\n` +
-            `7. Create AI-enhanced memory posters with /create_memory`;
+            `7. Create AI-enhanced memory posters with /create_memory\n\n` +
+            `**Features:**\n` +
+            `• 📍 Location-based attendance verification (within 200m)\n` +
+            `• 🎨 AI-enhanced memory poster creation\n` +
+            `• 📊 Detailed event summaries and statistics\n` +
+            `• 🔗 Blockchain integration for transparency\n` +
+            `• 📱 Swipeable UI for easy navigation`;
 
         await bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 
