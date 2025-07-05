@@ -40,8 +40,10 @@ create table memory_posters (
   id serial primary key,
   event_id integer references events(id) on delete cascade,
   image_url text not null,
+  blob_id text,  -- 🆕 ID for Walrus/IPFS blob reference
   created_at timestamptz default now()
 );
+
 
 
 create table users (

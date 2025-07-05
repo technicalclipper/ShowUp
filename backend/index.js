@@ -9,6 +9,7 @@ const { createWallet, getUserWallet, getWalletBalance, createEvent, getEvents, g
 const token = process.env.token;
 const TOKENNAME = process.env.TOKENNAME || 'ETH'; // Default to ETH if not set
 const CHAINNAME = process.env.CHAINNAME || 'base-sepolia'; // Default to base-sepolia if not set
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // Create a bot that uses 'polling' to fetch new updates
 const bot = new TelegramBot(token, { polling: true });
@@ -37,6 +38,143 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     const distance = R * c; // Distance in kilometers
     return distance;
+};
+
+// Helper function to call OpenAI Image Edit API
+const createMemoryPoster = async (fileId, eventName, eventDate) => {
+    try {
+        if (!OPENAI_API_KEY) {
+            throw new Error('OpenAI API key not configured');
+        }
+
+        // Import OpenAI SDK
+        const OpenAI = require('openai');
+        const client = new OpenAI({
+            apiKey: OPENAI_API_KEY
+        });
+
+        // Get file info from Telegram
+        const fileInfo = await bot.getFile(fileId);
+        if (!fileInfo || !fileInfo.file_path) {
+            throw new Error('Failed to get file info from Telegram');
+        }
+
+        // Construct the full file URL
+        const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+        
+        // Download the image from Telegram
+        const response = await fetch(fileUrl);
+        if (!response.ok) {
+            throw new Error('Failed to download image from Telegram');
+        }
+        
+        const imageBuffer = await response.arrayBuffer();
+
+        // Create the prompt based on event details
+        const formattedDate = new Date(eventDate).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+
+        const prompt = `Transform this group photo into a beautiful travel memory poster. Create a vintage travel scrapbook design with the following elements:
+
+1. Use the uploaded group photo as the main centerpiece
+2. Add a decorative title at the top: "${eventName} 🌊 2025" in stylish, handwritten font
+3. Include the date below: "${formattedDate}" in elegant typography
+4. Frame the photo with playful travel-themed decorations:
+   - Polaroid-style photo frames with rounded corners
+   - Travel stickers and emojis (🌴☀️🎒📸✈️🏖️)
+   - Handwritten-style labels and doodles
+   - Paper textures and tape corners
+5. Add beach and travel elements in the background:
+   - Subtle waves, sand, shells, palm trees
+   - Warm, golden hour lighting
+   - Faded travel map elements
+6. Maintain the original faces and expressions of people in the photo
+7. Create a warm, nostalgic color palette with pastel tones
+8. Make it look like a professional memory poster suitable for framing
+
+The overall design should capture the joy and excitement of group travel memories while preserving the authenticity of the original photo.`;
+
+        // Process image to meet OpenAI requirements
+        const { createCanvas, loadImage } = require('canvas');
+        
+        // Load the image
+        const image = await loadImage(Buffer.from(imageBuffer));
+        
+        // Create a square canvas (1024x1024 as required by OpenAI)
+        const canvas = createCanvas(1024, 1024);
+        const ctx = canvas.getContext('2d');
+        
+        // Calculate dimensions to maintain aspect ratio and center the image
+        const maxSize = 1024;
+        const scale = Math.min(maxSize / image.width, maxSize / image.height);
+        const scaledWidth = image.width * scale;
+        const scaledHeight = image.height * scale;
+        const x = (maxSize - scaledWidth) / 2;
+        const y = (maxSize - scaledHeight) / 2;
+        
+        // Fill background with white
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, maxSize, maxSize);
+        
+        // Draw the image centered and scaled
+        ctx.drawImage(image, x, y, scaledWidth, scaledHeight);
+        
+        // Convert to PNG buffer
+        const pngBuffer = canvas.toBuffer('image/png');
+
+        // Create a temporary file for the processed image
+        const fs = require('fs');
+        const path = require('path');
+        const tempImagePath = path.join(__dirname, 'temp_image.png');
+        fs.writeFileSync(tempImagePath, pngBuffer);
+
+        // Use OpenAI SDK with GPT-Image-1 for image editing
+        const { toFile } = require('openai');
+        
+        // Create file object for OpenAI
+        const imageFile = await toFile(fs.createReadStream(tempImagePath), null, {
+            type: "image/png",
+        });
+
+        // Call OpenAI Image Edit API
+        const rsp = await client.images.edit({
+            model: "gpt-image-1",
+            image: [imageFile],
+            prompt: prompt,
+            size: "1024x1024",
+            n: 1
+        });
+
+        // Clean up temporary file
+        fs.unlinkSync(tempImagePath);
+
+        if (!rsp.data || rsp.data.length === 0) {
+            throw new Error('No image generated from OpenAI API');
+        }
+
+        // The response contains base64-encoded image data
+        const image_base64 = rsp.data[0].b64_json;
+        const image_bytes = Buffer.from(image_base64, "base64");
+        
+        // Save the enhanced image to a temporary file
+        const enhancedImagePath = path.join(__dirname, 'enhanced_image.png');
+        fs.writeFileSync(enhancedImagePath, image_bytes);
+        
+        // For now, we'll use the original file ID to send the image back
+        // In a production environment, you might want to upload this to a cloud storage service
+        return {
+            type: 'enhanced',
+            filePath: enhancedImagePath,
+            message: '✨ Your photo has been transformed into a beautiful AI-enhanced memory poster!'
+        };
+
+    } catch (error) {
+        console.error('Error creating memory poster:', error);
+        throw error;
+    }
 };
 
 // Helper function to mark attendance on blockchain and database
@@ -183,6 +321,7 @@ bot.onText(/\/wallet/, async (msg) => {
 // Store user states for event creation and joining
 const userStates = new Map();
 const attendanceStates = new Map();
+const memoryStates = new Map();
 
 // Handle /create_event command
 bot.onText(/\/create_event/, async (msg) => {
@@ -523,6 +662,114 @@ bot.on('message', async (msg) => {
 
 
 
+        // Handle memory creation flow (photo upload)
+        const memoryState = memoryStates.get(telegramId);
+        if (memoryState && !msg.text?.startsWith('/')) {
+            try {
+                const { step, data } = memoryState;
+
+                if (step === 'photo_upload') {
+                    // Check if it's a photo message
+                    if (msg.photo && msg.photo.length > 0) {
+                        const photo = msg.photo[msg.photo.length - 1]; // Get the highest quality photo
+                        const caption = msg.caption || '';
+                        
+                        // Get event details
+                        const event = data.selectedEvent;
+                        
+                        // Send processing message
+                        await bot.sendMessage(chatId, 
+                            '🎨 **Creating your memory poster...**\n\n' +
+                            '⏳ Please wait while I enhance your photo with AI magic!'
+                        );
+                        
+                        try {
+                            // Create memory poster (currently returns original image)
+                            const result = await createMemoryPoster(photo.file_id, event.name, event.date);
+                            
+                            // Save memory to database
+                            const supabase = require('./model');
+                            const { data: memoryData, error: memoryError } = await supabase
+                                .from('memory_posters')
+                                .insert([{
+                                    event_id: event.id,
+                                    image_url: `file://${result.filePath}`, // Store file path for now
+                                    created_at: new Date().toISOString()
+                                }])
+                                .select();
+
+                            if (memoryError) {
+                                console.error('Database error saving memory:', memoryError);
+                                throw new Error('Failed to save memory to database');
+                            }
+
+                            // Send success message
+                            const successMessage = 
+                                `🎨 **AI-Enhanced Memory Poster Created!**\n\n` +
+                                `📅 **Event:** ${escapeMarkdown(event.name)}\n` +
+                                `📅 Date: ${new Date(event.date).toLocaleString()}\n` +
+                                `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
+                                `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
+                                `✨ ${result.message}`;
+
+                            // Send the enhanced image from file
+                            await bot.sendPhoto(chatId, result.filePath, {
+                                caption: successMessage,
+                                parse_mode: 'Markdown'
+                            });
+                            
+                        } catch (apiError) {
+                            console.error('Error creating enhanced memory poster:', apiError);
+                            
+                            // Fallback: save original photo if OpenAI API fails
+                            const supabase = require('./model');
+                            const { data: memoryData, error: memoryError } = await supabase
+                                .from('memory_posters')
+                                .insert([{
+                                    event_id: event.id,
+                                    image_url: `https://api.telegram.org/file/bot${token}/${photo.file_id}`,
+                                    created_at: new Date().toISOString()
+                                }])
+                                .select();
+
+                            if (memoryError) {
+                                console.error('Database error saving memory:', memoryError);
+                                throw new Error('Failed to save memory to database');
+                            }
+
+                            // Send fallback message with original photo
+                            const fallbackMessage = 
+                                `📸 **Memory Saved (Original Photo)**\n\n` +
+                                `📅 **Event:** ${escapeMarkdown(event.name)}\n` +
+                                `📅 Date: ${new Date(event.date).toLocaleString()}\n` +
+                                `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
+                                `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
+                                `⚠️ AI enhancement failed, but your original photo has been saved as a memory.`;
+
+                            await bot.sendPhoto(chatId, photo.file_id, {
+                                caption: fallbackMessage,
+                                parse_mode: 'Markdown'
+                            });
+                        }
+                        
+                        // Clear memory state
+                        memoryStates.delete(telegramId);
+                    } else {
+                        await bot.sendMessage(chatId, 
+                            '❌ Please send a photo using the 📎 attachment button and selecting "Photo".'
+                        );
+                    }
+                }
+            } catch (error) {
+                console.error('Error in memory creation flow:', error);
+                await bot.sendMessage(chatId, 
+                    '❌ Sorry, there was an error processing your photo. Please try again.'
+                );
+                memoryStates.delete(telegramId);
+            }
+            return;
+        }
+
         // Handle attendance confirmation flow (location sharing)
         const attendanceState = attendanceStates.get(telegramId);
         if (attendanceState && !msg.text?.startsWith('/')) {
@@ -622,6 +869,7 @@ bot.on('message', async (msg) => {
         try {
             if (telegramId) {
                 userStates.delete(telegramId);
+                memoryStates.delete(telegramId);
             }
         } catch (cleanupError) {
             console.error('Error during cleanup:', cleanupError);
@@ -646,6 +894,8 @@ bot.onText(/\/help/, async (msg) => {
             `• /confirm_attendance - View your joined events and attendance status\n` +
             `• /end_event - End your created events (creators only)\n` +
             `• /event_summary - View detailed summaries of finalized events\n\n` +
+            `**Memories:**\n` +
+            `• /create_memory - Create AI-enhanced memory posters with photos for events\n\n` +
             `**Analytics:**\n` +
             `• /stats - View your personal statistics and achievements\n\n` +
             `**How it works:**\n` +
@@ -654,7 +904,8 @@ bot.onText(/\/help/, async (msg) => {
             `3. Use /confirm_attendance to view your joined events\n` +
             `4. Show up to events to get your stake back plus rewards!\n` +
             `5. Use /event_summary to view detailed attendance reports\n` +
-            `6. Check your progress with /stats`;
+            `6. Check your progress with /stats\n` +
+            `7. Create AI-enhanced memory posters with /create_memory`;
 
         await bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 
@@ -1017,6 +1268,77 @@ bot.onText(/\/stats/, async (msg) => {
     }
 });
 
+// Handle /create_memory command (create memories for events)
+bot.onText(/\/create_memory/, async (msg) => {
+    try {
+        const chatId = msg.chat.id;
+        const telegramId = msg.from.id;
+
+        // Check if user has wallet
+        const userData = await getUserWallet(telegramId);
+        if (!userData) {
+            await bot.sendMessage(chatId, 
+                '❌ You need a wallet first! Use /create_wallet to create one.'
+            );
+            return;
+        }
+
+        // Get all events (both active and finalized)
+        const supabase = require('./model');
+        const { data: allEvents, error } = await supabase
+            .from('events')
+            .select('*')
+            .order('date', { ascending: false });
+
+        if (error) {
+            console.error('Database error:', error);
+            await bot.sendMessage(chatId, 
+                '❌ Sorry, there was an error retrieving events. Please try again later.'
+            );
+            return;
+        }
+
+        if (!allEvents || allEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ No events found. Create some events first with /create_event!'
+            );
+            return;
+        }
+
+        // Show list of events with clickable buttons
+        let message = '📸 **Create Event Memory**\n\n';
+        message += 'Choose an event to create a memory for:\n\n';
+        
+        allEvents.forEach((event, index) => {
+            const eventDate = new Date(event.date).toLocaleString();
+            const escapedName = escapeMarkdown(event.name);
+            const status = event.finalized ? '✅ Finalized' : '⏳ Active';
+            message += `${index + 1}. **${escapedName}**\n`;
+            message += `   📅 ${eventDate}\n`;
+            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
+            message += `   ${status}\n\n`;
+        });
+
+        // Create inline keyboard with event options
+        const keyboard = allEvents.map((event, index) => [
+            { text: `${index + 1}. ${event.name}`, callback_data: `create_memory_${event.id}` }
+        ]);
+
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: keyboard
+            }
+        });
+
+    } catch (error) {
+        console.error('Error listing events for memory creation:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error. Please try again later.'
+        );
+    }
+});
+
 // Handle inline button callbacks
 bot.on('callback_query', async (callbackQuery) => {
     // Declare telegramId at function scope so it's available in catch block
@@ -1313,6 +1635,48 @@ bot.on('callback_query', async (callbackQuery) => {
 
 
 
+        if (data.startsWith('create_memory_')) {
+            const eventId = parseInt(data.replace('create_memory_', ''));
+            
+            try {
+                // Get event details
+                const event = await getEventById(eventId);
+                if (!event) {
+                    await bot.sendMessage(chatId, '❌ Event not found. Please try again.');
+                    return;
+                }
+
+                // Store event data for photo upload step
+                memoryStates.set(telegramId, {
+                    step: 'photo_upload',
+                    data: { selectedEvent: event }
+                });
+
+                const eventDate = new Date(event.date).toLocaleString();
+                const message = 
+                    `📸 **Memory Creation for:** ${escapeMarkdown(event.name)}\n\n` +
+                    `📅 Date: ${eventDate}\n` +
+                    `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
+                    `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
+                    `📷 **Upload Iconic Group Photo**\n` +
+                    `Please send a photo that captures the memory of this event.\n\n` +
+                    `**How to upload:**\n` +
+                    `• Tap the 📎 attachment button\n` +
+                    `• Select "Photo"\n` +
+                    `• Choose or take a photo\n` +
+                    `• Add a caption if you want`;
+
+                await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+
+            } catch (error) {
+                console.error('Error setting up memory creation:', error);
+                await bot.sendMessage(chatId, 
+                    `❌ Failed to set up memory creation: ${error.message}`
+                );
+            }
+            return;
+        }
+
         if (data.startsWith('join_confirm_')) {
             const eventId = parseInt(data.replace('join_confirm_', ''));
             
@@ -1349,6 +1713,7 @@ bot.on('callback_query', async (callbackQuery) => {
         try {
             if (telegramId) {
                 attendanceStates.delete(telegramId);
+                memoryStates.delete(telegramId);
             }
         } catch (cleanupError) {
             console.error('Error during cleanup:', cleanupError);
