@@ -182,7 +182,6 @@ bot.onText(/\/wallet/, async (msg) => {
 
 // Store user states for event creation and joining
 const userStates = new Map();
-const joinStates = new Map();
 const attendanceStates = new Map();
 
 // Handle /create_event command
@@ -328,18 +327,51 @@ bot.onText(/\/join_event/, async (msg) => {
             return;
         }
 
-        // Initialize user state for event joining
-        joinStates.set(telegramId, {
-            step: 'event_name',
-            data: {}
+        // Get all available events
+        const allEvents = await getEvents();
+        
+        // Get events joined by this user
+        const joinedEvents = await getJoinedEvents(telegramId);
+        
+        // Filter out events already joined by user
+        const availableEvents = allEvents.filter(event => 
+            !joinedEvents.some(joined => joined.events.id === event.id) && !event.finalized
+        );
+
+        if (availableEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ No available events to join. All events are either finalized or you have already joined them.\n\n' +
+                'Use /create_event to create a new event!'
+            );
+            return;
+        }
+
+        // Show available events with inline buttons
+        let message = '🎉 **Available Events to Join:**\n\n';
+        
+        availableEvents.forEach((event, index) => {
+            const eventDate = new Date(event.date).toLocaleString();
+            const escapedName = escapeMarkdown(event.name);
+            message += `${index + 1}. **${escapedName}**\n`;
+            message += `   📅 ${eventDate}\n`;
+            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
+            message += `   👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n`;
         });
 
-        await bot.sendMessage(chatId, 
-            '🎉 Let\'s join an event! I\'ll guide you through the process.\n\n' +
-            '📝 **Step 1: Event Name**\n' +
-            'Please send me the name of the event you want to join:',
-            { parse_mode: 'Markdown' }
-        );
+        message += 'Click on an event to join:';
+
+        // Create inline keyboard with event options
+        const keyboard = availableEvents.map((event, index) => [
+            { text: `${index + 1}. ${event.name}`, callback_data: `select_event_${event.id}` }
+        ]);
+        keyboard.push([{ text: '❌ Cancel', callback_data: 'join_cancel' }]);
+
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: keyboard
+            }
+        });
 
     } catch (error) {
         console.error('Error starting event joining:', error);
@@ -355,7 +387,6 @@ bot.on('message', async (msg) => {
         const chatId = msg.chat.id;
         const telegramId = msg.from.id;
         const userState = userStates.get(telegramId);
-        const joinState = joinStates.get(telegramId);
 
         // Handle event creation flow
         if (userState && !msg.text?.startsWith('/')) {
@@ -580,128 +611,21 @@ bot.on('message', async (msg) => {
             return;
         }
 
-        // Handle event joining flow
-        if (joinState && !msg.text?.startsWith('/')) {
-            const { step, data } = joinState;
 
-            switch (step) {
-                case 'event_name':
-                    const eventName = msg.text;
-                    const events = await getEventByName(eventName);
-                    
-                    if (events.length === 0) {
-                        await bot.sendMessage(chatId, 
-                            '❌ No events found with that name. Please try again or use /events to see available events.'
-                        );
-                        return;
-                    }
-
-                    if (events.length === 1) {
-                        // Single event found, proceed to confirmation
-                        const event = events[0];
-                        data.selectedEvent = event;
-                        joinState.step = 'confirmation';
-                        joinStates.set(telegramId, joinState);
-
-                        const eventDate = new Date(event.date).toLocaleString();
-
-                        const message = 
-                            `📅 **Event Found:** ${event.name}\n\n` +
-                            `📅 Date: ${eventDate}\n` +
-                            `💰 Stake Amount: ${event.stake_amount} ${TOKENNAME}\n` +
-                            `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
-                            `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ${TOKENNAME} from your wallet.\n\n` +
-                            `Click the button below to confirm:`;
-
-                        await bot.sendMessage(chatId, message, {
-                            parse_mode: 'Markdown',
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [
-                                        { text: '✅ Join Event', callback_data: `join_confirm_${event.id}` },
-                                        { text: '❌ Cancel', callback_data: 'join_cancel' }
-                                    ]
-                                ]
-                            }
-                        });
-                    } else {
-                        // Multiple events found, show options
-                        data.eventOptions = events;
-                        joinState.step = 'select_event';
-                        joinStates.set(telegramId, joinState);
-
-                        let message = `📅 **Multiple events found:**\n\n`;
-                        events.forEach((event, index) => {
-                            const eventDate = new Date(event.date).toLocaleString();
-                            message += `${index + 1}. **${event.name}**\n`;
-                            message += `   📅 ${eventDate}\n`;
-                            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n\n`;
-                        });
-                        message += `Select an event to join:`;
-
-                        // Create inline keyboard with event options
-                        const keyboard = events.map((event, index) => [
-                            { text: `${index + 1}. ${event.name}`, callback_data: `select_event_${event.id}` }
-                        ]);
-                        keyboard.push([{ text: '❌ Cancel', callback_data: 'join_cancel' }]);
-
-                        await bot.sendMessage(chatId, message, {
-                            parse_mode: 'Markdown',
-                            reply_markup: {
-                                inline_keyboard: keyboard
-                            }
-                        });
-                    }
-                    break;
-
-                case 'select_event':
-                    const selection = parseInt(msg.text);
-                    if (isNaN(selection) || selection < 1 || selection > data.eventOptions.length) {
-                        await bot.sendMessage(chatId, 
-                            `❌ Please send a number between 1 and ${data.eventOptions.length}.`
-                        );
-                        return;
-                    }
-
-                    const selectedEvent = data.eventOptions[selection - 1];
-                    data.selectedEvent = selectedEvent;
-                    joinState.step = 'confirmation';
-                    joinStates.set(telegramId, joinState);
-
-                    const eventDate = new Date(selectedEvent.date).toLocaleString();
-
-                    const message = 
-                        `📅 **Event Selected:** ${selectedEvent.name}\n\n` +
-                        `📅 Date: ${eventDate}\n` +
-                        `💰 Stake Amount: ${selectedEvent.stake_amount} ${TOKENNAME}\n` +
-                        `👤 Creator: \`${escapeWalletAddress(selectedEvent.creator)}\`\n\n` +
-                        `⚠️ **Important:** Joining this event will stake ${selectedEvent.stake_amount} ${TOKENNAME} from your wallet.\n\n` +
-                        `Click the button below to confirm:`;
-
-                    await bot.sendMessage(chatId, message, {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [
-                                [
-                                    { text: '✅ Join Event', callback_data: `join_confirm_${selectedEvent.id}` },
-                                    { text: '❌ Cancel', callback_data: 'join_cancel' }
-                                ]
-                            ]
-                        }
-                    });
-                    break;
-
-
-            }
-        }
 
     } catch (error) {
         console.error('Error in event flow:', error);
         await bot.sendMessage(msg.chat.id, 
             '❌ Sorry, there was an error. Please try again.'
         );
-        userStates.delete(telegramId);
-        joinStates.delete(telegramId);
+        // Safely delete states if telegramId is available
+        try {
+            if (telegramId) {
+                userStates.delete(telegramId);
+            }
+        } catch (cleanupError) {
+            console.error('Error during cleanup:', cleanupError);
+        }
     }
 });
 
@@ -905,7 +829,6 @@ bot.on('callback_query', async (callbackQuery) => {
 
         if (data === 'join_cancel') {
             await bot.sendMessage(chatId, '❌ Event joining cancelled.');
-            joinStates.delete(telegramId);
             return;
         }
 
@@ -1040,7 +963,6 @@ bot.on('callback_query', async (callbackQuery) => {
             
             if (!event) {
                 await bot.sendMessage(chatId, '❌ Event not found. Please try again.');
-                joinStates.delete(telegramId);
                 return;
             }
 
@@ -1094,8 +1016,6 @@ bot.on('callback_query', async (callbackQuery) => {
                 );
             }
 
-            // Clear join state
-            joinStates.delete(telegramId);
             return;
         }
 
@@ -1107,7 +1027,6 @@ bot.on('callback_query', async (callbackQuery) => {
         // Safely delete states if telegramId is available
         try {
             if (telegramId) {
-                joinStates.delete(telegramId);
                 attendanceStates.delete(telegramId);
             }
         } catch (cleanupError) {
