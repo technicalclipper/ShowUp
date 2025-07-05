@@ -717,7 +717,8 @@ bot.onText(/\/help/, async (msg) => {
             `• /create_event - Create a new event\n` +
             `• /events - List all available and joined events\n` +
             `• /join_event - Join an existing event\n` +
-            `• /confirm_attendance - View your joined events and attendance status\n\n` +
+            `• /confirm_attendance - View your joined events and attendance status\n` +
+            `• /end_event - End your created events (creators only)\n\n` +
             `**How it works:**\n` +
             `1. Create a wallet with /create_wallet\n` +
             `2. Create events with /create_event or join existing ones with /join_event\n` +
@@ -735,6 +736,79 @@ bot.onText(/\/help/, async (msg) => {
 });
 
 
+
+// Handle /end_event command (for event creators to finalize events)
+bot.onText(/\/end_event/, async (msg) => {
+    try {
+        const chatId = msg.chat.id;
+        const telegramId = msg.from.id;
+
+        // Check if user has wallet
+        const userData = await getUserWallet(telegramId);
+        if (!userData) {
+            await bot.sendMessage(chatId, 
+                '❌ You need a wallet first! Use /create_wallet to create one.'
+            );
+            return;
+        }
+
+        // Get events created by this user
+        const supabase = require('./model');
+        const { data: createdEvents, error } = await supabase
+            .from('events')
+            .select('*')
+            .eq('creator', userData.wallet)
+            .eq('finalized', false)
+            .order('date', { ascending: true });
+
+        if (error) {
+            console.error('Database error:', error);
+            await bot.sendMessage(chatId, 
+                '❌ Sorry, there was an error retrieving your events. Please try again later.'
+            );
+            return;
+        }
+
+        if (!createdEvents || createdEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ You haven\'t created any active events yet. Use /create_event to create one!'
+            );
+            return;
+        }
+
+        // Show list of created events with clickable buttons
+        let message = '🏁 **Your Created Events**\n\n';
+        
+        createdEvents.forEach((event, index) => {
+            const eventDate = new Date(event.date).toLocaleString();
+            const escapedName = escapeMarkdown(event.name);
+            message += `${index + 1}. **${escapedName}**\n`;
+            message += `   📅 ${eventDate}\n`;
+            message += `   💰 Stake: ${event.stake_amount} ETH\n`;
+            message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
+        });
+
+        message += 'Click on an event to get its ID:';
+
+        // Create inline keyboard with event options
+        const keyboard = createdEvents.map((event, index) => [
+            { text: `${index + 1}. ${event.name}`, callback_data: `end_event_${event.id}` }
+        ]);
+
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: keyboard
+            }
+        });
+
+    } catch (error) {
+        console.error('Error listing created events:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error. Please try again later.'
+        );
+    }
+});
 
 // Handle /confirm_attendance command (for participants to confirm their attendance)
 bot.onText(/\/confirm_attendance/, async (msg) => {
@@ -863,6 +937,96 @@ bot.on('callback_query', async (callbackQuery) => {
                 `• Choose "Send your current location"`;
 
             await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            return;
+        }
+
+        if (data.startsWith('end_event_')) {
+            const eventId = parseInt(data.replace('end_event_', ''));
+            
+            await bot.sendMessage(chatId, '⏳ Finalizing event... Please wait.');
+            
+            try {
+                // Call smart contract to finalize event using bot wallet
+                const config = require('./config');
+                console.log('Finalizing event:', eventId);
+                
+                if (!config.contract) {
+                    throw new Error('Contract not initialized properly');
+                }
+                
+                const tx = await config.contract.finalizeEvent(eventId);
+                const receipt = await tx.wait();
+
+                console.log('Event finalized on blockchain:', receipt.hash);
+
+                // Update event status in database
+                const supabase = require('./model');
+                const { error: updateError } = await supabase
+                    .from('events')
+                    .update({ finalized: true })
+                    .eq('id', eventId);
+
+                if (updateError) {
+                    console.error('Database update error:', updateError);
+                    throw new Error('Failed to update event status in database');
+                }
+
+                console.log('Event status updated in database');
+
+                // Get event details and participants
+                const event = await getEventById(eventId);
+                const { data: participants, error: participantsError } = await supabase
+                    .from('participants')
+                    .select(`
+                        wallet,
+                        attended,
+                        users (
+                            telegram_name
+                        )
+                    `)
+                    .eq('event_id', eventId);
+
+                if (participantsError) {
+                    console.error('Error fetching participants:', participantsError);
+                    throw new Error('Failed to fetch event participants');
+                }
+
+                // Generate event summary
+                const eventDate = new Date(event.date).toLocaleString();
+                const totalParticipants = participants.length;
+                const attendedParticipants = participants.filter(p => p.attended).length;
+                const notAttendedParticipants = totalParticipants - attendedParticipants;
+
+                let summaryMessage = 
+                    `🏁 **Event Finalized Successfully!**\n\n` +
+                    `📅 **Event Details:**\n` +
+                    `• Name: ${escapeMarkdown(event.name)}\n` +
+                    `• Date: ${eventDate}\n` +
+                    `• Stake: ${event.stake_amount} ETH\n` +
+                    `• Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
+                    `📊 **Attendance Summary:**\n` +
+                    `• Total Participants: ${totalParticipants}\n` +
+                    `• Attended: ${attendedParticipants}\n` +
+                    `• Not Attended: ${notAttendedParticipants}\n\n` +
+                    `🔗 **Transaction:** \`${escapeWalletAddress(receipt.hash)}\`\n\n`;
+
+                if (participants.length > 0) {
+                    summaryMessage += `👥 **Participants:**\n`;
+                    participants.forEach((participant, index) => {
+                        const userName = participant.users?.telegram_name || 'Unknown User';
+                        const status = participant.attended ? '✅ Attended' : '❌ Not Attended';
+                        summaryMessage += `${index + 1}. ${userName} - ${status}\n`;
+                    });
+                }
+
+                await bot.sendMessage(chatId, summaryMessage, { parse_mode: 'Markdown' });
+
+            } catch (error) {
+                console.error('Error finalizing event:', error);
+                await bot.sendMessage(chatId, 
+                    `❌ Failed to finalize event: ${error.message}`
+                );
+            }
             return;
         }
 

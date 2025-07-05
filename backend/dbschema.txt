@@ -21,7 +21,7 @@ CopyEdit
 create table participants (
   id serial primary key,
   event_id integer references events(id) on delete cascade,
-  wallet text not null,
+  wallet text not null references users(wallet) on delete cascade,
   telegram_id text,
   has_staked boolean default false,
   attended boolean default false,
