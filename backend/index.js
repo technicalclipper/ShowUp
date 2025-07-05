@@ -7,6 +7,8 @@ const { createWallet, getUserWallet, getWalletBalance, createEvent, getEvents, g
 
 // Get token from environment variable
 const token = process.env.token;
+const TOKENNAME = process.env.TOKENNAME || 'ETH'; // Default to ETH if not set
+const CHAINNAME = process.env.CHAINNAME || 'base-sepolia'; // Default to base-sepolia if not set
 
 // Create a bot that uses 'polling' to fetch new updates
 const bot = new TelegramBot(token, { polling: true });
@@ -166,7 +168,7 @@ bot.onText(/\/wallet/, async (msg) => {
             `👤 Name: ${userData.telegram_name}\n` +
             `🔑 Address: \`${escapeWalletAddress(userData.wallet)}\`\n` +
             `📱 Telegram ID: ${telegramId}\n` +
-            `💎 Balance: ${balance} ETH`;
+            `💎 Balance: ${balance} ${TOKENNAME}`;
 
         await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 
@@ -247,7 +249,7 @@ bot.onText(/\/events/, async (msg) => {
                 const escapedName = escapeMarkdown(event.name);
                 message += `${index + 1}. **${escapedName}**\n`;
                 message += `   📅 ${eventDate}\n`;
-                message += `   💰 Stake: ${event.stake_amount} ETH\n`;
+                message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
                 message += `   👤 Creator: \`${escapedCreator}\`\n`;
                 message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
             });
@@ -266,7 +268,7 @@ bot.onText(/\/events/, async (msg) => {
                 const escapedName = escapeMarkdown(event.name);
                 message += `${index + 1}. **${escapedName}**\n`;
                 message += `   📅 ${eventDate}\n`;
-                message += `   💰 Stake: ${event.stake_amount} ETH\n`;
+                message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
                 message += `   👤 Creator: \`${escapedCreator}\`\n`;
                 message += `   ${joined.attended ? '✅ Attended' : '⏳ Not Attended'}\n`;
                 message += `   ${event.finalized ? '🏁 Event Finalized' : '🔄 Event Active'}\n\n`;
@@ -400,8 +402,8 @@ bot.on('message', async (msg) => {
                     
                     await bot.sendMessage(chatId, 
                         '💰 **Step 3: Stake Amount**\n' +
-                        'How much ETH should participants stake to join?\n' +
-                        'Please send a number (e.g., `0.01` for 0.01 ETH):',
+                        `How much ${TOKENNAME} should participants stake to join?\n` +
+                        `Please send a number (e.g., \`0.01\` for 0.01 ${TOKENNAME}):`,
                         { parse_mode: 'Markdown' }
                     );
                     break;
@@ -463,7 +465,7 @@ bot.on('message', async (msg) => {
                         `📝 **Event Details:**\n` +
                         `• Name: ${data.eventName}\n` +
                         `• Date: ${new Date(data.eventDate).toLocaleString()}\n` +
-                        `• Stake: ${data.stakeAmount} ETH\n` +
+                        `• Stake: ${data.stakeAmount} ${TOKENNAME}\n` +
                         `• Location: ${data.locationText}\n` +
                         `• Creator: \`${escapeWalletAddress(userData.wallet)}\`\n\n` +
                         `🔗 **Blockchain Info:**\n` +
@@ -514,7 +516,7 @@ bot.on('message', async (msg) => {
                             `📅 **Event Details:**\n` +
                             `• Name: ${escapeMarkdown(event.name)}\n` +
                             `• Date: ${new Date(event.date).toLocaleString()}\n` +
-                            `• Stake: ${event.stake_amount} ETH`;
+                            `• Stake: ${event.stake_amount} ${TOKENNAME}`;
 
                         // Check if event has location coordinates
                         if (event.location_lat && event.location_lng) {
@@ -606,9 +608,9 @@ bot.on('message', async (msg) => {
                         const message = 
                             `📅 **Event Found:** ${event.name}\n\n` +
                             `📅 Date: ${eventDate}\n` +
-                            `💰 Stake Amount: ${event.stake_amount} ETH\n` +
+                            `💰 Stake Amount: ${event.stake_amount} ${TOKENNAME}\n` +
                             `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
-                            `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ETH from your wallet.\n\n` +
+                            `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ${TOKENNAME} from your wallet.\n\n` +
                             `Click the button below to confirm:`;
 
                         await bot.sendMessage(chatId, message, {
@@ -633,7 +635,7 @@ bot.on('message', async (msg) => {
                             const eventDate = new Date(event.date).toLocaleString();
                             message += `${index + 1}. **${event.name}**\n`;
                             message += `   📅 ${eventDate}\n`;
-                            message += `   💰 Stake: ${event.stake_amount} ETH\n\n`;
+                            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n\n`;
                         });
                         message += `Select an event to join:`;
 
@@ -671,9 +673,9 @@ bot.on('message', async (msg) => {
                     const message = 
                         `📅 **Event Selected:** ${selectedEvent.name}\n\n` +
                         `📅 Date: ${eventDate}\n` +
-                        `💰 Stake Amount: ${selectedEvent.stake_amount} ETH\n` +
+                        `💰 Stake Amount: ${selectedEvent.stake_amount} ${TOKENNAME}\n` +
                         `👤 Creator: \`${escapeWalletAddress(selectedEvent.creator)}\`\n\n` +
-                        `⚠️ **Important:** Joining this event will stake ${selectedEvent.stake_amount} ETH from your wallet.\n\n` +
+                        `⚠️ **Important:** Joining this event will stake ${selectedEvent.stake_amount} ${TOKENNAME} from your wallet.\n\n` +
                         `Click the button below to confirm:`;
 
                     await bot.sendMessage(chatId, message, {
@@ -784,7 +786,7 @@ bot.onText(/\/end_event/, async (msg) => {
             const escapedName = escapeMarkdown(event.name);
             message += `${index + 1}. **${escapedName}**\n`;
             message += `   📅 ${eventDate}\n`;
-            message += `   💰 Stake: ${event.stake_amount} ETH\n`;
+            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
             message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
         });
 
@@ -844,7 +846,7 @@ bot.onText(/\/confirm_attendance/, async (msg) => {
             const escapedName = escapeMarkdown(event.name);
             message += `${index + 1}. **${escapedName}**\n`;
             message += `   📅 ${eventDate}\n`;
-            message += `   💰 Stake: ${event.stake_amount} ETH\n`;
+            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
             message += `   ${joined.attended ? '✅ Attended' : '⏳ Not Attended'}\n\n`;
         });
 
@@ -927,7 +929,7 @@ bot.on('callback_query', async (callbackQuery) => {
             const message = 
                 `📅 **Event Selected:** ${escapeMarkdown(event.name)}\n\n` +
                 `📅 Date: ${eventDate}\n` +
-                `💰 Stake: ${event.stake_amount} ETH\n` +
+                `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
                 `📍 Event Location: ${event.location_lat && event.location_lng ? 'Location shared via Telegram' : 'Manual location'}\n\n` +
                 `📍 **Share Your Current Location**\n` +
                 `Please share your current location so I can verify you're at the event.\n\n` +
@@ -1002,7 +1004,7 @@ bot.on('callback_query', async (callbackQuery) => {
                     `📅 **Event Details:**\n` +
                     `• Name: ${escapeMarkdown(event.name)}\n` +
                     `• Date: ${eventDate}\n` +
-                    `• Stake: ${event.stake_amount} ETH\n` +
+                    `• Stake: ${event.stake_amount} ${TOKENNAME}\n` +
                     `• Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
                     `📊 **Attendance Summary:**\n` +
                     `• Total Participants: ${totalParticipants}\n` +
@@ -1044,13 +1046,13 @@ bot.on('callback_query', async (callbackQuery) => {
 
             const eventDate = new Date(event.date).toLocaleString();
 
-            const message = 
-                `📅 **Event Selected:** ${event.name}\n\n` +
-                `📅 Date: ${eventDate}\n` +
-                `💰 Stake Amount: ${event.stake_amount} ETH\n` +
-                `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
-                `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ETH from your wallet.\n\n` +
-                `Click the button below to confirm:`;
+                                    const message = 
+                            `📅 **Event Selected:** ${event.name}\n\n` +
+                            `📅 Date: ${eventDate}\n` +
+                            `💰 Stake Amount: ${event.stake_amount} ${TOKENNAME}\n` +
+                            `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
+                            `⚠️ **Important:** Joining this event will stake ${event.stake_amount} ${TOKENNAME} from your wallet.\n\n` +
+                            `Click the button below to confirm:`;
 
             await bot.sendMessage(chatId, message, {
                 parse_mode: 'Markdown',
@@ -1079,7 +1081,7 @@ bot.on('callback_query', async (callbackQuery) => {
                 const successMessage = 
                     `🎉 **Successfully Joined Event!**\n\n` +
                     `📅 **Event:** ${result.eventName}\n` +
-                    `💰 **Stake Paid:** ${result.stakeAmount} ETH\n` +
+                    `💰 **Stake Paid:** ${result.stakeAmount} ${TOKENNAME}\n` +
                     `🔗 **Transaction:** \`${result.txHash}\`\n\n` +
                     `✅ You are now a participant! Show up to get your stake back plus rewards!`;
 

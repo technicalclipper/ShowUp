@@ -118,7 +118,7 @@ async function createEvent(telegramId, eventName, eventDate, stakeAmount, locati
             stake_amount: parseFloat(stakeAmount),
             creator: userData.wallet, // Still store user as creator in database
             finalized: false,
-            chain: 'base-sepolia', // Add chain field as required by database
+            chain: process.env.CHAINNAME || 'base-sepolia', // Use environment variable for chain name
             location_lat: locationLat,
             location_lng: locationLng
         };
