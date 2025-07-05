@@ -644,12 +644,14 @@ bot.onText(/\/help/, async (msg) => {
             `• /events - List all available and joined events\n` +
             `• /join_event - Join an existing event\n` +
             `• /confirm_attendance - View your joined events and attendance status\n` +
-            `• /end_event - End your created events (creators only)\n\n` +
+            `• /end_event - End your created events (creators only)\n` +
+            `• /event_summary - View detailed summaries of finalized events\n\n` +
             `**How it works:**\n` +
             `1. Create a wallet with /create_wallet\n` +
             `2. Create events with /create_event or join existing ones with /join_event\n` +
             `3. Use /confirm_attendance to view your joined events\n` +
-            `4. Show up to events to get your stake back plus rewards!`;
+            `4. Show up to events to get your stake back plus rewards!\n` +
+            `5. Use /event_summary to view detailed attendance reports`;
 
         await bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 
@@ -796,6 +798,79 @@ bot.onText(/\/confirm_attendance/, async (msg) => {
     }
 });
 
+// Handle /event_summary command (show finalized events with attendance details)
+bot.onText(/\/event_summary/, async (msg) => {
+    try {
+        const chatId = msg.chat.id;
+        const telegramId = msg.from.id;
+
+        // Check if user has wallet
+        const userData = await getUserWallet(telegramId);
+        if (!userData) {
+            await bot.sendMessage(chatId, 
+                '❌ You need a wallet first! Use /create_wallet to create one.'
+            );
+            return;
+        }
+
+        // Get all finalized events
+        const supabase = require('./model');
+        const { data: finalizedEvents, error } = await supabase
+            .from('events')
+            .select('*')
+            .eq('finalized', true)
+            .order('date', { ascending: false });
+
+        if (error) {
+            console.error('Database error:', error);
+            await bot.sendMessage(chatId, 
+                '❌ Sorry, there was an error retrieving events. Please try again later.'
+            );
+            return;
+        }
+
+        if (!finalizedEvents || finalizedEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ No finalized events found yet. Events need to be finalized by their creators first.'
+            );
+            return;
+        }
+
+        // Show list of finalized events with clickable buttons
+        let message = '📊 **Event Summaries (Finalized Events)**\n\n';
+        
+        finalizedEvents.forEach((event, index) => {
+            const eventDate = new Date(event.date).toLocaleString();
+            const escapedName = escapeMarkdown(event.name);
+            const escapedCreator = escapeWalletAddress(event.creator);
+            message += `${index + 1}. **${escapedName}**\n`;
+            message += `   📅 ${eventDate}\n`;
+            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
+            message += `   👤 Creator: \`${escapedCreator}\`\n\n`;
+        });
+
+        message += 'Click on an event to view detailed attendance summary:';
+
+        // Create inline keyboard with event options
+        const keyboard = finalizedEvents.map((event, index) => [
+            { text: `${index + 1}. ${event.name}`, callback_data: `event_summary_${event.id}` }
+        ]);
+
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: keyboard
+            }
+        });
+
+    } catch (error) {
+        console.error('Error listing finalized events:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error. Please try again later.'
+        );
+    }
+});
+
 // Handle inline button callbacks
 bot.on('callback_query', async (callbackQuery) => {
     // Declare telegramId at function scope so it's available in catch block
@@ -862,6 +937,106 @@ bot.on('callback_query', async (callbackQuery) => {
                 `• Choose "Send your current location"`;
 
             await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            return;
+        }
+
+        if (data.startsWith('event_summary_')) {
+            const eventId = parseInt(data.replace('event_summary_', ''));
+            
+            try {
+                // Get event details
+                const event = await getEventById(eventId);
+                if (!event) {
+                    await bot.sendMessage(chatId, '❌ Event not found. Please try again.');
+                    return;
+                }
+
+                // Get all participants for this event
+                const supabase = require('./model');
+                const { data: participants, error: participantsError } = await supabase
+                    .from('participants')
+                    .select(`
+                        wallet,
+                        attended,
+                        checkin_time,
+                        location_lat,
+                        location_lng,
+                        users (
+                            telegram_name
+                        )
+                    `)
+                    .eq('event_id', eventId);
+
+                if (participantsError) {
+                    console.error('Error fetching participants:', participantsError);
+                    throw new Error('Failed to fetch event participants');
+                }
+
+                // Generate detailed event summary
+                const eventDate = new Date(event.date).toLocaleString();
+                const totalParticipants = participants.length;
+                const attendedParticipants = participants.filter(p => p.attended).length;
+                const notAttendedParticipants = totalParticipants - attendedParticipants;
+
+                let summaryMessage = 
+                    `📊 **Event Summary Report**\n\n` +
+                    `📅 **Event Details:**\n` +
+                    `• Name: ${escapeMarkdown(event.name)}\n` +
+                    `• Date: ${eventDate}\n` +
+                    `• Stake: ${event.stake_amount} ${TOKENNAME}\n` +
+                    `• Creator: \`${escapeWalletAddress(event.creator)}\`\n` +
+                    `• Chain: ${event.chain}\n`;
+
+                // Add location if available
+                if (event.location_lat && event.location_lng) {
+                    summaryMessage += `• Location: \`${event.location_lat}, ${event.location_lng}\`\n`;
+                } else {
+                    summaryMessage += `• Location: Manual location (no coordinates)\n`;
+                }
+
+                summaryMessage += `\n📊 **Attendance Statistics:**\n` +
+                    `• Total Participants: ${totalParticipants}\n` +
+                    `• Attended: ${attendedParticipants}\n` +
+                    `• Not Attended: ${notAttendedParticipants}\n` +
+                    `• Attendance Rate: ${totalParticipants > 0 ? ((attendedParticipants / totalParticipants) * 100).toFixed(1) : 0}%\n\n`;
+
+                if (participants.length > 0) {
+                    summaryMessage += `👥 **Detailed Participant List:**\n\n`;
+                    
+                    // Show attended participants first
+                    const attended = participants.filter(p => p.attended);
+                    const notAttended = participants.filter(p => !p.attended);
+                    
+                    if (attended.length > 0) {
+                        summaryMessage += `✅ **Attended (${attended.length}):**\n`;
+                        attended.forEach((participant, index) => {
+                            const userName = participant.users?.telegram_name || 'Unknown User';
+                            
+                            summaryMessage += `${index + 1}. **${userName}**\n`;
+                            summaryMessage += `   🔑 Wallet: \`${escapeWalletAddress(participant.wallet)}\`\n\n`;
+                        });
+                    }
+                    
+                    if (notAttended.length > 0) {
+                        summaryMessage += `❌ **Not Attended (${notAttended.length}):**\n`;
+                        notAttended.forEach((participant, index) => {
+                            const userName = participant.users?.telegram_name || 'Unknown User';
+                            summaryMessage += `${index + 1}. **${userName}**\n`;
+                            summaryMessage += `   🔑 Wallet: \`${escapeWalletAddress(participant.wallet)}\`\n\n`;
+                        });
+                    }
+                } else {
+                    summaryMessage += `👥 **No participants found for this event.**\n`;
+                }
+
+                await bot.sendMessage(chatId, summaryMessage, { parse_mode: 'Markdown' });
+
+            } catch (error) {
+                console.error('Error generating event summary:', error);
+                await bot.sendMessage(chatId, 
+                    `❌ Failed to generate event summary: ${error.message}`
+                );
+            }
             return;
         }
 
