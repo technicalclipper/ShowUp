@@ -198,33 +198,43 @@ The overall design should capture the joy and excitement of group travel memorie
 // Helper function to mark attendance on blockchain and database
 const markAttendance = async (telegramId, eventId, chatId) => {
     try {
+        console.log('markAttendance called with:', { telegramId, eventId, chatId });
+        
         // Get user data
         const userData = await getUserWallet(telegramId);
         if (!userData) {
+            console.error('User wallet not found for telegramId:', telegramId);
             throw new Error('User wallet not found');
         }
+        console.log('User data retrieved:', { wallet: userData.wallet, name: userData.telegram_name });
 
         // Get event data
         const event = await getEventById(eventId);
         if (!event) {
+            console.error('Event not found for eventId:', eventId);
             throw new Error('Event not found');
         }
+        console.log('Event data retrieved:', { name: event.name, finalized: event.finalized });
 
         // Call smart contract to mark attendance on blockchain using bot wallet
         const config = require('./config');
         console.log('Marking attendance for event:', eventId, 'user wallet:', userData.wallet);
         
         if (!config.contract) {
+            console.error('Contract not initialized properly');
             throw new Error('Contract not initialized properly');
         }
         
+        console.log('Calling smart contract markAttendance...');
         const tx = await config.contract.markAttendance(eventId, userData.wallet);
+        console.log('Transaction sent, waiting for receipt...');
         const receipt = await tx.wait();
 
         console.log('Blockchain transaction completed:', receipt.hash);
 
         // Update attendance in database
         const supabase = require('./model');
+        console.log('Updating database attendance...');
         const { error: updateError } = await supabase
             .from('participants')
             .update({ attended: true })
@@ -389,77 +399,33 @@ bot.onText(/\/events/, async (msg) => {
         // Get events joined by this user
         const joinedEvents = await getJoinedEvents(telegramId);
         
-        let message = '';
-
         // Show available events (events not joined by user)
         const availableEvents = allEvents.filter(event => 
             !joinedEvents.some(joined => joined.events.id === event.id)
         );
 
-        if (availableEvents.length > 0) {
-            message += '📅 **Available Events:**\n\n';
-            
-            availableEvents.forEach((event, index) => {
-                const eventDate = new Date(event.date).toLocaleString();
-                const escapedCreator = escapeWalletAddress(event.creator);
-                const escapedName = escapeMarkdown(event.name);
-                message += `${index + 1}. **${escapedName}**\n`;
-                message += `   📅 ${eventDate}\n`;
-                message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
-                message += `   👤 Creator: \`${escapedCreator}\`\n`;
-                message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
-            });
-        } else {
-            message += '📅 **No available events to join.**\n\n';
-        }
-
-        // Show joined events
-        if (joinedEvents.length > 0) {
-            message += '🎉 **Your Joined Events:**\n\n';
-            
-            joinedEvents.forEach((joined, index) => {
-                const event = joined.events;
-                const eventDate = new Date(event.date).toLocaleString();
-                const escapedCreator = escapeWalletAddress(event.creator);
-                const escapedName = escapeMarkdown(event.name);
-                message += `${index + 1}. **${escapedName}**\n`;
-                message += `   📅 ${eventDate}\n`;
-                message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
-                message += `   👤 Creator: \`${escapedCreator}\`\n`;
-                message += `   ${joined.attended ? '✅ Attended' : '⏳ Not Attended'}\n`;
-                message += `   ${event.finalized ? '🏁 Event Finalized' : '🔄 Event Active'}\n\n`;
-            });
-        } else {
-            message += '🎉 **You haven\'t joined any events yet.**\n';
-            message += 'Use /join_event to join an event!\n\n';
-        }
-
-        // Add helpful footer
         if (allEvents.length === 0) {
-            message = '📅 **No events found.**\n\nCreate one with /create_event!';
-        } else {
-            message += '💡 **Tips:**\n';
-            message += '• Use /join_event to join available events\n';
-            message += '• Use /create_event to create new events\n';
-            message += '• Show up to events to get your stake back + rewards!';
+            await bot.sendMessage(chatId, 
+                '📅 **No events found.**\n\nCreate one with /create_event!',
+                { parse_mode: 'Markdown' }
+            );
+            return;
         }
 
-        // Debug: Log the message to see what's being sent
-        console.log('Events message length:', message.length);
-        console.log('Events message preview:', message.substring(0, 200) + '...');
-        
-        // Try without Markdown first to see if the issue is with parsing
-        try {
-            await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-        } catch (markdownError) {
-            console.error('Markdown parsing failed, trying without Markdown:', markdownError.message);
-            // Remove Markdown formatting and send as plain text
-            const plainMessage = message
-                .replace(/\*\*/g, '') // Remove bold
-                .replace(/`/g, '') // Remove code blocks
-                .replace(/\\/g, ''); // Remove escape characters
-            await bot.sendMessage(chatId, plainMessage);
-        }
+        // Store events in user state for navigation
+        userStates.set(telegramId, {
+            step: 'browsing_events',
+            data: {
+                allEvents: allEvents,
+                availableEvents: availableEvents,
+                joinedEvents: joinedEvents,
+                currentIndex: 0,
+                currentType: 'all' // 'all', 'available', 'joined'
+            }
+        });
+
+        // Show first event
+        await showEventSlide(chatId, telegramId, 0, 'all');
 
     } catch (error) {
         console.error('Error listing events:', error);
@@ -468,6 +434,120 @@ bot.onText(/\/events/, async (msg) => {
         );
     }
 });
+
+// Helper function to show a single event slide
+async function showEventSlide(chatId, telegramId, index, type) {
+    try {
+        const userState = userStates.get(telegramId);
+        if (!userState || userState.step !== 'browsing_events') {
+            return;
+        }
+
+        const { allEvents, availableEvents, joinedEvents } = userState.data;
+        let events, eventType;
+        
+        switch (type) {
+            case 'available':
+                events = availableEvents;
+                eventType = 'Available Events';
+                break;
+            case 'joined':
+                events = joinedEvents;
+                eventType = 'Your Joined Events';
+                break;
+            default:
+                events = allEvents;
+                eventType = 'All Events';
+        }
+
+        if (!events || events.length === 0) {
+            await bot.sendMessage(chatId, 
+                `📅 **No ${eventType.toLowerCase()} found.**`,
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        if (index >= events.length) {
+            index = 0;
+        }
+        if (index < 0) {
+            index = events.length - 1;
+        }
+
+        const event = type === 'joined' ? events[index].events : events[index];
+        const eventDate = new Date(event.date).toLocaleString();
+        const escapedCreator = escapeWalletAddress(event.creator);
+        const escapedName = escapeMarkdown(event.name);
+        
+        let message = `📅 **${eventType}**\n\n`;
+        message += `**${escapedName}**\n`;
+        message += `📅 Date: ${eventDate}\n`;
+        message += `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
+        message += `👤 Creator: \`${escapedCreator}\`\n`;
+        
+        if (type === 'joined') {
+            const joinedEvent = events[index];
+            message += `Status: ${joinedEvent.attended ? '✅ Attended' : '⏳ Not Attended'}\n`;
+            message += `Event: ${event.finalized ? '🏁 Finalized' : '🔄 Active'}\n`;
+        } else {
+            message += `Status: ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n`;
+        }
+        
+        message += `\n📄 ${index + 1} of ${events.length}`;
+
+        // Create navigation keyboard
+        const keyboard = [];
+        
+        // Navigation row
+        const navRow = [];
+        if (events.length > 1) {
+            navRow.push({ text: '⬅️ Previous', callback_data: `event_nav_${type}_${index - 1}` });
+            navRow.push({ text: 'Next ➡️', callback_data: `event_nav_${type}_${index + 1}` });
+        }
+        keyboard.push(navRow);
+        
+        // Type selector row
+        const typeRow = [];
+        typeRow.push({ text: '📋 All', callback_data: `event_type_all_${index}` });
+        typeRow.push({ text: '🎯 Available', callback_data: `event_type_available_${index}` });
+        typeRow.push({ text: '🎉 Joined', callback_data: `event_type_joined_${index}` });
+        keyboard.push(typeRow);
+        
+        // Action row
+        const actionRow = [];
+        if (type === 'available' && !event.finalized) {
+            actionRow.push({ text: '🎉 Join Event', callback_data: `select_event_${event.id}` });
+        }
+        if (type === 'joined' && !event.finalized && !events[index].attended) {
+            actionRow.push({ text: '📍 Confirm Attendance', callback_data: `event_id_${event.id}` });
+        }
+        if (actionRow.length > 0) {
+            keyboard.push(actionRow);
+        }
+        
+        // Close button
+        keyboard.push([{ text: '❌ Close', callback_data: 'close_events' }]);
+
+        // Update user state
+        userState.data.currentIndex = index;
+        userState.data.currentType = type;
+        userStates.set(telegramId, userState);
+
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: keyboard
+            }
+        });
+
+    } catch (error) {
+        console.error('Error showing event slide:', error);
+        await bot.sendMessage(chatId, 
+            '❌ Sorry, there was an error showing the event. Please try again.'
+        );
+    }
+}
 
 // Handle /join_event command
 bot.onText(/\/join_event/, async (msg) => {
@@ -503,32 +583,17 @@ bot.onText(/\/join_event/, async (msg) => {
             return;
         }
 
-        // Show available events with inline buttons
-        let message = '🎉 **Available Events to Join:**\n\n';
-        
-        availableEvents.forEach((event, index) => {
-            const eventDate = new Date(event.date).toLocaleString();
-            const escapedName = escapeMarkdown(event.name);
-            message += `${index + 1}. **${escapedName}**\n`;
-            message += `   📅 ${eventDate}\n`;
-            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
-            message += `   👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n`;
-        });
-
-        message += 'Click on an event to join:';
-
-        // Create inline keyboard with event options
-        const keyboard = availableEvents.map((event, index) => [
-            { text: `${index + 1}. ${event.name}`, callback_data: `select_event_${event.id}` }
-        ]);
-        keyboard.push([{ text: '❌ Cancel', callback_data: 'join_cancel' }]);
-
-        await bot.sendMessage(chatId, message, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: keyboard
+        // Store events in user state for navigation
+        userStates.set(telegramId, {
+            step: 'browsing_join_events',
+            data: {
+                availableEvents: availableEvents,
+                currentIndex: 0
             }
         });
+
+        // Show first available event
+        await showJoinEventSlide(chatId, telegramId, 0);
 
     } catch (error) {
         console.error('Error starting event joining:', error);
@@ -538,8 +603,98 @@ bot.onText(/\/join_event/, async (msg) => {
     }
 });
 
-// Handle event joining steps
+// Helper function to show a single join event slide
+async function showJoinEventSlide(chatId, telegramId, index) {
+    try {
+        const userState = userStates.get(telegramId);
+        if (!userState || userState.step !== 'browsing_join_events') {
+            return;
+        }
+
+        const { availableEvents } = userState.data;
+
+        if (!availableEvents || availableEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ No available events to join.',
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        if (index >= availableEvents.length) {
+            index = 0;
+        }
+        if (index < 0) {
+            index = availableEvents.length - 1;
+        }
+
+        const event = availableEvents[index];
+        const eventDate = new Date(event.date).toLocaleString();
+        const escapedCreator = escapeWalletAddress(event.creator);
+        const escapedName = escapeMarkdown(event.name);
+        
+        let message = `🎉 **Available Events to Join**\n\n`;
+        message += `**${escapedName}**\n`;
+        message += `📅 Date: ${eventDate}\n`;
+        message += `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
+        message += `👤 Creator: \`${escapedCreator}\`\n`;
+        message += `Status: ⏳ Active\n`;
+        message += `\n📄 ${index + 1} of ${availableEvents.length}`;
+
+        // Create navigation keyboard
+        const keyboard = [];
+        
+        // Navigation row
+        const navRow = [];
+        if (availableEvents.length > 1) {
+            navRow.push({ text: '⬅️ Previous', callback_data: `join_nav_${index - 1}` });
+            navRow.push({ text: 'Next ➡️', callback_data: `join_nav_${index + 1}` });
+        }
+        keyboard.push(navRow);
+        
+        // Action row
+        keyboard.push([
+            { text: '🎉 Join Event', callback_data: `select_event_${event.id}` }
+        ]);
+        
+        // Close button
+        keyboard.push([{ text: '❌ Cancel', callback_data: 'join_cancel' }]);
+
+        // Update user state
+        userState.data.currentIndex = index;
+        userStates.set(telegramId, userState);
+
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: keyboard
+            }
+        });
+
+    } catch (error) {
+        console.error('Error showing join event slide:', error);
+        await bot.sendMessage(chatId, 
+            '❌ Sorry, there was an error showing the event. Please try again.'
+        );
+    }
+}
+
+// Handle all messages including location
 bot.on('message', async (msg) => {
+    console.log('=== MESSAGE RECEIVED ===');
+    console.log('Message type:', typeof msg);
+    console.log('Message keys:', Object.keys(msg));
+    console.log('From user:', msg.from?.id, msg.from?.first_name);
+    console.log('Chat ID:', msg.chat?.id);
+    console.log('Has text:', !!msg.text);
+    console.log('Has location:', !!msg.location);
+    console.log('Has photo:', !!msg.photo);
+    console.log('Text content:', msg.text || 'No text');
+    
+    if (msg.location) {
+        console.log('=== LOCATION MESSAGE DETECTED ===');
+        console.log('Location data:', msg.location);
+    }
     try {
         const chatId = msg.chat.id;
         const telegramId = msg.from.id;
@@ -645,22 +800,22 @@ bot.on('message', async (msg) => {
                             data.locationLng
                         );
 
-                                            // Get user data for display
-                    const userData = await getUserWallet(telegramId);
+                        // Get user data for display
+                        const userData = await getUserWallet(telegramId);
 
-                    const successMessage = 
-                        `🎉 **Event Created Successfully!**\n\n` +
-                        `📝 **Event Details:**\n` +
-                        `• Name: ${data.eventName}\n` +
-                        `• Date: ${new Date(data.eventDate).toLocaleString()}\n` +
-                        `• Stake: ${data.stakeAmount} ${TOKENNAME}\n` +
-                        `• Location: ${data.locationText}\n` +
-                        `• Creator: \`${escapeWalletAddress(userData.wallet)}\`\n\n` +
-                        `🔗 **Blockchain Info:**\n` +
-                        `• Event ID: \`${result.eventId}\`\n` +
-                        `• Transaction: \`${escapeWalletAddress(result.txHash)}\`\n` +
-                        `• Bot Wallet: \`${escapeWalletAddress(result.botWallet)}\`\n\n` +
-                        `✅ Your event is now live on the blockchain!`;
+                        const successMessage = 
+                            `🎉 **Event Created Successfully!**\n\n` +
+                            `📝 **Event Details:**\n` +
+                            `• Name: ${data.eventName}\n` +
+                            `• Date: ${new Date(data.eventDate).toLocaleString()}\n` +
+                            `• Stake: ${data.stakeAmount} ${TOKENNAME}\n` +
+                            `• Location: ${data.locationText}\n` +
+                            `• Creator: \`${escapeWalletAddress(userData.wallet)}\`\n\n` +
+                            `🔗 **Blockchain Info:**\n` +
+                            `• Event ID: \`${result.eventId}\`\n` +
+                            `• Transaction: \`${escapeWalletAddress(result.txHash)}\`\n` +
+                            `• Bot Wallet: \`${escapeWalletAddress(result.botWallet)}\`\n\n` +
+                            `✅ Your event is now live on the blockchain!`;
 
                         await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
 
@@ -677,8 +832,6 @@ bot.on('message', async (msg) => {
             }
             return;
         }
-
-
 
         // Handle memory creation flow (photo upload)
         const memoryState = memoryStates.get(telegramId);
@@ -857,7 +1010,7 @@ bot.on('message', async (msg) => {
                             message += `• Required: Within 0.2 km (200 meters)\n`;
                             
                             if (distance <= 0.2) { // 200 meters = 0.2 km
-                                // User is within 100 meters, mark attendance
+                                // User is within 200 meters, mark attendance
                                 try {
                                     const result = await markAttendance(telegramId, event.id, chatId);
                                     
@@ -906,8 +1059,6 @@ bot.on('message', async (msg) => {
             return;
         }
 
-
-
     } catch (error) {
         console.error('Error in event flow:', error);
         await bot.sendMessage(msg.chat.id, 
@@ -922,6 +1073,240 @@ bot.on('message', async (msg) => {
         } catch (cleanupError) {
             console.error('Error during cleanup:', cleanupError);
         }
+    }
+});
+
+// Handle photo messages specifically
+bot.on('photo', async (msg) => {
+    console.log('=== PHOTO EVENT TRIGGERED ===');
+    console.log('Photo message:', msg);
+    
+    const chatId = msg.chat.id;
+    const telegramId = msg.from.id;
+    
+    // Check if user has memory state
+    const memoryState = memoryStates.get(telegramId);
+    if (memoryState && memoryState.step === 'photo_upload') {
+        console.log('=== PROCESSING PHOTO FOR MEMORY ===');
+        try {
+            const { data } = memoryState;
+            const photo = msg.photo[msg.photo.length - 1]; // Get the highest quality photo
+            const caption = msg.caption || '';
+            
+            // Get event details
+            const event = data.selectedEvent;
+            
+            // Send processing message
+            await bot.sendMessage(chatId, 
+                '🎨 **Creating your memory poster...**\n\n' +
+                '⏳ Please wait while I enhance your photo with AI magic!'
+            );
+            
+            try {
+                // Create memory poster (currently returns original image)
+                const result = await createMemoryPoster(photo.file_id, event.name, event.date);
+                
+                // Save memory to database with Walrus blob ID
+                const supabase = require('./model');
+                const { data: memoryData, error: memoryError } = await supabase
+                    .from('memory_posters')
+                    .insert([{
+                        event_id: event.id,
+                        image_url: result.walrusUrl,
+                        blob_id: result.blobId,
+                        created_at: new Date().toISOString()
+                    }])
+                    .select();
+
+                if (memoryError) {
+                    console.error('Database error saving memory:', memoryError);
+                    throw new Error('Failed to save memory to database');
+                }
+
+                // Send success message
+                const successMessage = 
+                    `🎨 **AI-Enhanced Memory Poster Created!**\n\n` +
+                    `📅 **Event:** ${escapeMarkdown(event.name)}\n` +
+                    `📅 Date: ${new Date(event.date).toLocaleString()}\n` +
+                    `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
+                    `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
+                    `✨ ${result.message}`;
+
+                // Send the enhanced image using buffer
+                await bot.sendPhoto(chatId, result.imageBuffer, {
+                    caption: successMessage,
+                    parse_mode: 'Markdown'
+                });
+                
+            } catch (apiError) {
+                console.error('Error creating enhanced memory poster:', apiError);
+                
+                // Fallback: save original photo to Walrus if OpenAI API fails
+                const { uploadFileToWalrus, getWalrusUrl } = require('./walrus');
+                
+                // Get original photo from Telegram
+                const fileInfo = await bot.getFile(photo.file_id);
+                const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+                const response = await fetch(fileUrl);
+                const imageBuffer = await response.arrayBuffer();
+                
+                // Save to temporary file
+                const tempImagePath = path.join(__dirname, 'temp_original.png');
+                fs.writeFileSync(tempImagePath, Buffer.from(imageBuffer));
+                
+                // Compress image before uploading to Walrus
+                const sharp = require('sharp');
+                const compressedImagePath = path.join(__dirname, 'temp_compressed.jpg');
+                await sharp(tempImagePath)
+                    .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+                    .jpeg({ quality: 80 })
+                    .toFile(compressedImagePath);
+                
+                // Upload compressed image to Walrus
+                const blobId = await uploadFileToWalrus(compressedImagePath, { epochs: 10 });
+                const walrusUrl = getWalrusUrl(blobId);
+                
+                // Clean up
+                fs.unlinkSync(tempImagePath);
+                fs.unlinkSync(compressedImagePath);
+                
+                const supabase = require('./model');
+                const { data: memoryData, error: memoryError } = await supabase
+                    .from('memory_posters')
+                    .insert([{
+                        event_id: event.id,
+                        image_url: walrusUrl,
+                        blob_id: blobId,
+                        created_at: new Date().toISOString()
+                    }])
+                    .select();
+
+                if (memoryError) {
+                    console.error('Database error saving memory:', memoryError);
+                    throw new Error('Failed to save memory to database');
+                }
+
+                // Send fallback message with original photo
+                const fallbackMessage = 
+                    `📸 **Memory Saved (Original Photo)**\n\n` +
+                    `📅 **Event:** ${escapeMarkdown(event.name)}\n` +
+                    `📅 Date: ${new Date(event.date).toLocaleString()}\n` +
+                    `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n` +
+                    `👤 Creator: \`${escapeWalletAddress(event.creator)}\`\n\n` +
+                    `⚠️ AI enhancement failed, but your original photo has been saved as a memory.`;
+
+                await bot.sendPhoto(chatId, Buffer.from(imageBuffer), {
+                    caption: fallbackMessage,
+                    parse_mode: 'Markdown'
+                });
+            }
+            
+            // Clear memory state
+            memoryStates.delete(telegramId);
+        } catch (error) {
+            console.error('Error processing photo for memory:', error);
+            await bot.sendMessage(chatId, 
+                '❌ Sorry, there was an error processing your photo. Please try again.'
+            );
+            memoryStates.delete(telegramId);
+        }
+    } else {
+        console.log('No memory state found for user:', telegramId);
+        await bot.sendMessage(chatId, 
+            '❌ No active memory creation. Please use /create_memory first.'
+        );
+    }
+});
+
+// Handle location messages specifically
+bot.on('location', async (msg) => {
+    console.log('=== LOCATION EVENT TRIGGERED ===');
+    console.log('Location message:', msg);
+    
+    const chatId = msg.chat.id;
+    const telegramId = msg.from.id;
+    
+    // Check if user has attendance state
+    const attendanceState = attendanceStates.get(telegramId);
+    if (attendanceState && attendanceState.step === 'location') {
+        console.log('=== PROCESSING LOCATION FOR ATTENDANCE ===');
+        try {
+            const { data } = attendanceState;
+            const userLat = msg.location.latitude;
+            const userLng = msg.location.longitude;
+            
+            // Get event location
+            const event = data.selectedEvent;
+            
+            // Display event ID and coordinates
+            let message = 
+                `📅 **Event ID:** \`${event.id}\`\n\n` +
+                `📍 **Your Location:**\n` +
+                `• Latitude: \`${userLat}\`\n` +
+                `• Longitude: \`${userLng}\`\n\n` +
+                `📅 **Event Details:**\n` +
+                `• Name: ${escapeMarkdown(event.name)}\n` +
+                `• Date: ${new Date(event.date).toLocaleString()}\n` +
+                `• Stake: ${event.stake_amount} ${TOKENNAME}`;
+
+            // Check if event has location coordinates
+            if (event.location_lat && event.location_lng) {
+                // Calculate distance between user and event location
+                const distance = calculateDistance(
+                    userLat, userLng,
+                    event.location_lat, event.location_lng
+                );
+                
+                message += `\n\n📍 **Distance Check:**\n`;
+                message += `• Distance from event: ${distance.toFixed(3)} km\n`;
+                message += `• Required: Within 0.2 km (200 meters)\n`;
+                
+                if (distance <= 0.2) { // 200 meters = 0.2 km
+                    // User is within 200 meters, mark attendance
+                    try {
+                        const result = await markAttendance(telegramId, event.id, chatId);
+                        
+                        message += `\n\n✅ **Attendance Confirmed!**\n`;
+                        message += `🎉 Your attendance has been marked on the blockchain!\n`;
+                        message += `🔗 Transaction: \`${escapeWalletAddress(result.txHash)}\``;
+                        
+                    } catch (attendanceError) {
+                        message += `\n\n❌ **Failed to mark attendance:** ${attendanceError.message}`;
+                    }
+                } else {
+                    message += `\n\n❌ **Location too far!**\n`;
+                    message += `Please move closer to the event location and try again.`;
+                }
+            } else {
+                // Event doesn't have location coordinates, just mark attendance
+                try {
+                    const result = await markAttendance(telegramId, event.id, chatId);
+                    
+                    message += `\n\n✅ **Attendance Confirmed!**\n`;
+                    message += `🎉 Your attendance has been marked on the blockchain!\n`;
+                    message += `🔗 Transaction: \`${escapeWalletAddress(result.txHash)}\``;
+                    
+                } catch (attendanceError) {
+                    message += `\n\n❌ **Failed to mark attendance:** ${attendanceError.message}`;
+                }
+            }
+
+            await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            
+            // Clear attendance state
+            attendanceStates.delete(telegramId);
+        } catch (error) {
+            console.error('Error processing location for attendance:', error);
+            await bot.sendMessage(chatId, 
+                '❌ Sorry, there was an error processing your location. Please try again.'
+            );
+            attendanceStates.delete(telegramId);
+        }
+    } else {
+        console.log('No attendance state found for user:', telegramId);
+        await bot.sendMessage(chatId, 
+            '❌ No active attendance confirmation. Please use /confirm_attendance first.'
+        );
     }
 });
 
@@ -1007,24 +1392,84 @@ bot.onText(/\/end_event/, async (msg) => {
             return;
         }
 
-        // Show list of created events with clickable buttons
-        let message = '🏁 **Your Created Events**\n\n';
-        
-        createdEvents.forEach((event, index) => {
-            const eventDate = new Date(event.date).toLocaleString();
-            const escapedName = escapeMarkdown(event.name);
-            message += `${index + 1}. **${escapedName}**\n`;
-            message += `   📅 ${eventDate}\n`;
-            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
-            message += `   ${event.finalized ? '✅ Finalized' : '⏳ Active'}\n\n`;
+        // Store events in user state for navigation
+        userStates.set(telegramId, {
+            step: 'browsing_end_events',
+            data: {
+                createdEvents: createdEvents,
+                currentIndex: 0
+            }
         });
 
-        message += 'Click on an event to get its ID:';
+        // Show first created event
+        await showEndEventSlide(chatId, telegramId, 0);
 
-        // Create inline keyboard with event options
-        const keyboard = createdEvents.map((event, index) => [
-            { text: `${index + 1}. ${event.name}`, callback_data: `end_event_${event.id}` }
+    } catch (error) {
+        console.error('Error listing created events:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error. Please try again later.'
+        );
+    }
+});
+
+// Helper function to show a single end event slide
+async function showEndEventSlide(chatId, telegramId, index) {
+    try {
+        const userState = userStates.get(telegramId);
+        if (!userState || userState.step !== 'browsing_end_events') {
+            return;
+        }
+
+        const { createdEvents } = userState.data;
+
+        if (!createdEvents || createdEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ No active events found.',
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        if (index >= createdEvents.length) {
+            index = 0;
+        }
+        if (index < 0) {
+            index = createdEvents.length - 1;
+        }
+
+        const event = createdEvents[index];
+        const eventDate = new Date(event.date).toLocaleString();
+        const escapedName = escapeMarkdown(event.name);
+        
+        let message = `🏁 **Your Created Events**\n\n`;
+        message += `**${escapedName}**\n`;
+        message += `📅 Date: ${eventDate}\n`;
+        message += `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
+        message += `Status: ⏳ Active\n`;
+        message += `\n📄 ${index + 1} of ${createdEvents.length}`;
+
+        // Create navigation keyboard
+        const keyboard = [];
+        
+        // Navigation row
+        const navRow = [];
+        if (createdEvents.length > 1) {
+            navRow.push({ text: '⬅️ Previous', callback_data: `end_nav_${index - 1}` });
+            navRow.push({ text: 'Next ➡️', callback_data: `end_nav_${index + 1}` });
+        }
+        keyboard.push(navRow);
+        
+        // Action row
+        keyboard.push([
+            { text: '🏁 End Event', callback_data: `end_event_${event.id}` }
         ]);
+        
+        // Close button
+        keyboard.push([{ text: '❌ Close', callback_data: 'close_end_events' }]);
+
+        // Update user state
+        userState.data.currentIndex = index;
+        userStates.set(telegramId, userState);
 
         await bot.sendMessage(chatId, message, {
             parse_mode: 'Markdown',
@@ -1034,12 +1479,12 @@ bot.onText(/\/end_event/, async (msg) => {
         });
 
     } catch (error) {
-        console.error('Error listing created events:', error);
-        await bot.sendMessage(msg.chat.id, 
-            '❌ Sorry, there was an error. Please try again later.'
+        console.error('Error showing end event slide:', error);
+        await bot.sendMessage(chatId, 
+            '❌ Sorry, there was an error showing the event. Please try again.'
         );
     }
-});
+}
 
 // Handle /confirm_attendance command (for participants to confirm their attendance)
 bot.onText(/\/confirm_attendance/, async (msg) => {
@@ -1066,25 +1511,99 @@ bot.onText(/\/confirm_attendance/, async (msg) => {
             return;
         }
 
-        // Show list of joined events with clickable buttons
-        let message = '📍 **Your Joined Events**\n\n';
-        
-        joinedEvents.forEach((joined, index) => {
-            const event = joined.events;
-            const eventDate = new Date(event.date).toLocaleString();
-            const escapedName = escapeMarkdown(event.name);
-            message += `${index + 1}. **${escapedName}**\n`;
-            message += `   📅 ${eventDate}\n`;
-            message += `   💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
-            message += `   ${joined.attended ? '✅ Attended' : '⏳ Not Attended'}\n\n`;
+        // Filter events that haven't been attended yet
+        const unattendedEvents = joinedEvents.filter(joined => !joined.attended && !joined.events.finalized);
+
+        if (unattendedEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '✅ You have already attended all your joined events or they have been finalized!'
+            );
+            return;
+        }
+
+        // Store events in user state for navigation
+        userStates.set(telegramId, {
+            step: 'browsing_attendance_events',
+            data: {
+                joinedEvents: joinedEvents,
+                unattendedEvents: unattendedEvents,
+                currentIndex: 0
+            }
         });
 
-        message += 'Click on an event to get its ID:';
+        // Show first joined event
+        await showAttendanceEventSlide(chatId, telegramId, 0);
 
-        // Create inline keyboard with event options
-        const keyboard = joinedEvents.map((joined, index) => [
-            { text: `${index + 1}. ${joined.events.name}`, callback_data: `event_id_${joined.events.id}` }
-        ]);
+    } catch (error) {
+        console.error('Error listing joined events:', error);
+        await bot.sendMessage(msg.chat.id, 
+            '❌ Sorry, there was an error. Please try again later.'
+        );
+    }
+});
+
+// Helper function to show a single attendance event slide
+async function showAttendanceEventSlide(chatId, telegramId, index) {
+    try {
+        const userState = userStates.get(telegramId);
+        if (!userState || userState.step !== 'browsing_attendance_events') {
+            return;
+        }
+
+        const { joinedEvents, unattendedEvents } = userState.data;
+
+        if (!joinedEvents || joinedEvents.length === 0) {
+            await bot.sendMessage(chatId, 
+                '❌ No joined events found.',
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        if (index >= joinedEvents.length) {
+            index = 0;
+        }
+        if (index < 0) {
+            index = joinedEvents.length - 1;
+        }
+
+        const joined = joinedEvents[index];
+        const event = joined.events;
+        const eventDate = new Date(event.date).toLocaleString();
+        const escapedName = escapeMarkdown(event.name);
+        
+        let message = `📍 **Your Joined Events**\n\n`;
+        message += `**${escapedName}**\n`;
+        message += `📅 Date: ${eventDate}\n`;
+        message += `💰 Stake: ${event.stake_amount} ${TOKENNAME}\n`;
+        message += `Status: ${joined.attended ? '✅ Attended' : '⏳ Not Attended'}\n`;
+        message += `Event: ${event.finalized ? '🏁 Finalized' : '🔄 Active'}\n`;
+        message += `\n📄 ${index + 1} of ${joinedEvents.length}`;
+
+        // Create navigation keyboard
+        const keyboard = [];
+        
+        // Navigation row
+        const navRow = [];
+        if (joinedEvents.length > 1) {
+            navRow.push({ text: '⬅️ Previous', callback_data: `attendance_nav_${index - 1}` });
+            navRow.push({ text: 'Next ➡️', callback_data: `attendance_nav_${index + 1}` });
+        }
+        keyboard.push(navRow);
+        
+        // Action row - only show confirm attendance for unattended, active events
+        if (!joined.attended && !event.finalized) {
+            keyboard.push([
+                { text: '📍 Confirm Attendance', callback_data: `event_id_${event.id}` }
+            ]);
+        }
+        
+        // Close button
+        keyboard.push([{ text: '❌ Close', callback_data: 'close_attendance_events' }]);
+
+        // Update user state
+        userState.data.currentIndex = index;
+        userStates.set(telegramId, userState);
 
         await bot.sendMessage(chatId, message, {
             parse_mode: 'Markdown',
@@ -1094,12 +1613,12 @@ bot.onText(/\/confirm_attendance/, async (msg) => {
         });
 
     } catch (error) {
-        console.error('Error listing joined events:', error);
-        await bot.sendMessage(msg.chat.id, 
-            '❌ Sorry, there was an error. Please try again later.'
+        console.error('Error showing attendance event slide:', error);
+        await bot.sendMessage(chatId, 
+            '❌ Sorry, there was an error showing the event. Please try again.'
         );
     }
-});
+}
 
 // Handle /event_summary command (show finalized events with attendance details)
 bot.onText(/\/event_summary/, async (msg) => {
@@ -1521,21 +2040,102 @@ bot.on('callback_query', async (callbackQuery) => {
             return;
         }
 
+        if (data === 'close_events') {
+            // Clear user state
+            userStates.delete(telegramId);
+            await bot.sendMessage(chatId, '✅ Event browser closed.');
+            return;
+        }
+
+        // Handle event navigation
+        if (data.startsWith('event_nav_')) {
+            const parts = data.split('_');
+            const type = parts[2];
+            const index = parseInt(parts[3]);
+            
+            await showEventSlide(chatId, telegramId, index, type);
+            return;
+        }
+
+        // Handle event type switching
+        if (data.startsWith('event_type_')) {
+            const parts = data.split('_');
+            const type = parts[2];
+            const index = parseInt(parts[3]);
+            
+            await showEventSlide(chatId, telegramId, index, type);
+            return;
+        }
+
+        // Handle join event navigation
+        if (data.startsWith('join_nav_')) {
+            const index = parseInt(data.replace('join_nav_', ''));
+            
+            await showJoinEventSlide(chatId, telegramId, index);
+            return;
+        }
+
+        // Handle end event navigation
+        if (data.startsWith('end_nav_')) {
+            const index = parseInt(data.replace('end_nav_', ''));
+            
+            await showEndEventSlide(chatId, telegramId, index);
+            return;
+        }
+
+        if (data === 'close_end_events') {
+            // Clear user state
+            userStates.delete(telegramId);
+            await bot.sendMessage(chatId, '✅ Event browser closed.');
+            return;
+        }
+
+        // Handle attendance event navigation
+        if (data.startsWith('attendance_nav_')) {
+            const index = parseInt(data.replace('attendance_nav_', ''));
+            
+            await showAttendanceEventSlide(chatId, telegramId, index);
+            return;
+        }
+
+        if (data === 'close_attendance_events') {
+            // Clear user state
+            userStates.delete(telegramId);
+            await bot.sendMessage(chatId, '✅ Attendance browser closed.');
+            return;
+        }
+
         if (data.startsWith('event_id_')) {
             const eventId = data.replace('event_id_', '');
+            console.log('=== EVENT_ID CALLBACK TRIGGERED ===');
+            console.log('Event ID selected for attendance:', eventId, 'User:', telegramId);
+            console.log('User name:', userName);
             
             // Get event details
             const event = await getEventById(eventId);
             if (!event) {
+                console.log('Event not found:', eventId);
                 await bot.sendMessage(chatId, '❌ Event not found. Please try again.');
                 return;
             }
 
+            console.log('Event found:', event.name, 'Setting attendance state for user:', telegramId);
+            console.log('Event details:', {
+                id: event.id,
+                name: event.name,
+                date: event.date,
+                location_lat: event.location_lat,
+                location_lng: event.location_lng
+            });
+            
             // Store event data for location step
             attendanceStates.set(telegramId, {
                 step: 'location',
                 data: { selectedEvent: event }
             });
+            
+            console.log('Attendance state set:', attendanceStates.get(telegramId));
+            console.log('Current attendance states:', Array.from(attendanceStates.entries()));
 
             const eventDate = new Date(event.date).toLocaleString();
             const message = 
@@ -1551,6 +2151,7 @@ bot.on('callback_query', async (callbackQuery) => {
                 `• Choose "Send your current location"`;
 
             await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            console.log('=== EVENT_ID CALLBACK COMPLETED ===');
             return;
         }
 
