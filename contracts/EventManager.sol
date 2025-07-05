@@ -14,13 +14,26 @@ contract ShowUpEvent {
         mapping(address => bool) attended;
     }
 
+    struct MemoryNFT {
+        uint256 eventId;
+        string imageUrl;
+        string eventName;
+        uint256 eventDate;
+        address creator;
+        uint256 tokenId;
+    }
+
     mapping(uint256 => Event) public events;
+    mapping(uint256 => MemoryNFT) public memoryNFTs; // tokenId => MemoryNFT
+    mapping(uint256 => uint256[]) public eventMemories; // eventId => array of tokenIds
     uint256 public eventCount;
+    uint256 public nftTokenId;
 
     event EventCreated(uint256 indexed eventId, string name, uint256 stakeAmount);
     event Joined(uint256 indexed eventId, address user);
     event AttendanceMarked(uint256 indexed eventId, address user);
     event Finalized(uint256 indexed eventId);
+    event MemoryNFTMinted(uint256 indexed tokenId, uint256 indexed eventId, string imageUrl, address creator);
 
     modifier onlyCreator(uint256 eventId) {
         require(msg.sender == events[eventId].creator, "Only creator");
@@ -90,9 +103,41 @@ contract ShowUpEvent {
         e.finalized = true;
         emit Finalized(eventId);
     }
-   
 
-    
+    function mintMemoryNFT(uint256 eventId, string memory imageUrl) external {
+        Event storage e = events[eventId];
+        require(e.finalized, "Event must be finalized");
+        require(e.hasStaked[msg.sender], "Must be event participant");
+        
+        nftTokenId++;
+        
+        MemoryNFT storage nft = memoryNFTs[nftTokenId];
+        nft.eventId = eventId;
+        nft.imageUrl = imageUrl;
+        nft.eventName = e.name;
+        nft.eventDate = e.date;
+        nft.creator = msg.sender;
+        nft.tokenId = nftTokenId;
+        
+        eventMemories[eventId].push(nftTokenId);
+        
+        emit MemoryNFTMinted(nftTokenId, eventId, imageUrl, msg.sender);
+    }
+
+    function getEventMemories(uint256 eventId) external view returns (uint256[] memory) {
+        return eventMemories[eventId];
+    }
+
+    function getMemoryNFT(uint256 tokenId) external view returns (
+        uint256 eventId,
+        string memory imageUrl,
+        string memory eventName,
+        uint256 eventDate,
+        address creator
+    ) {
+        MemoryNFT storage nft = memoryNFTs[tokenId];
+        return (nft.eventId, nft.imageUrl, nft.eventName, nft.eventDate, nft.creator);
+    }
 
     // Fallback to receive ETH
     receive() external payable {}

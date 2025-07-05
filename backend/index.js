@@ -698,6 +698,13 @@ bot.on('message', async (msg) => {
     try {
         const chatId = msg.chat.id;
         const telegramId = msg.from.id;
+        
+        // Skip photo messages - let the dedicated photo handler process them
+        if (msg.photo) {
+            console.log('=== PHOTO MESSAGE IGNORED BY MAIN HANDLER ===');
+            return;
+        }
+        
         const userState = userStates.get(telegramId);
 
         // Handle event creation flow
@@ -952,7 +959,31 @@ bot.on('photo', async (msg) => {
     // Check if user has memory state
     const memoryState = memoryStates.get(telegramId);
     if (memoryState && memoryState.step === 'photo_upload') {
+        // Check if already processing to prevent duplicates
+        if (memoryState.processing) {
+            console.log('=== ALREADY PROCESSING PHOTO FOR USER ===');
+            await bot.sendMessage(chatId, 
+                '⏳ Your photo is already being processed. Please wait...'
+            );
+            return;
+        }
+
         console.log('=== PROCESSING PHOTO FOR MEMORY ===');
+        
+        // Set processing flag to prevent duplicate processing
+        memoryState.processing = true;
+        memoryStates.set(telegramId, memoryState);
+        
+        // Set a timeout to clear processing flag after 5 minutes (300000ms)
+        setTimeout(() => {
+            const currentState = memoryStates.get(telegramId);
+            if (currentState && currentState.processing) {
+                console.log('=== CLEARING PROCESSING FLAG DUE TO TIMEOUT ===');
+                delete currentState.processing;
+                memoryStates.set(telegramId, currentState);
+            }
+        }, 300000); // 5 minutes timeout
+        
         try {
             const { data } = memoryState;
             const photo = msg.photo[msg.photo.length - 1]; // Get the highest quality photo
@@ -1002,6 +1033,57 @@ bot.on('photo', async (msg) => {
                     caption: successMessage,
                     parse_mode: 'Markdown'
                 });
+
+                // Ask user if they want to mint an NFT
+                const nftMessage = 
+                    `🎨 **Would you like to mint an NFT?**\n\n` +
+                    `✨ Your memory poster has been created successfully!\n` +
+                    `🔗 You can now mint it as an NFT on the blockchain.\n\n` +
+                    `📋 **NFT Details:**\n` +
+                    `• Event: ${escapeMarkdown(event.name)}\n` +
+                    `• Image URL: ${result.walrusUrl}\n` +
+                    `• Chain: ${CHAINNAME}\n\n` +
+                    `💡 **Benefits:**\n` +
+                    `• Permanent blockchain record\n` +
+                    `• Decentralized storage on Walrus\n` +
+                    `• Unique token ID\n` +
+                    `• Proof of participation`;
+
+                // Store NFT minting data in memory state for callback handling
+                const nftMintingData = {
+                    step: 'nft_minting',
+                    data: {
+                        eventId: event.id,
+                        imageUrl: result.walrusUrl,
+                        eventName: event.name
+                    }
+                };
+                
+                console.log('=== SETTING NFT MINTING DATA ===');
+                console.log('Telegram ID:', telegramId);
+                console.log('NFT minting data:', nftMintingData);
+                
+                memoryStates.set(telegramId, nftMintingData);
+                
+                console.log('Memory state set successfully');
+                console.log('Current memory states:', Array.from(memoryStates.entries()));
+
+                const nftKeyboard = {
+                    inline_keyboard: [
+                        [
+                            { text: '🎨 Mint NFT', callback_data: `mint_nft_${event.id}` },
+                            { text: '❌ Skip', callback_data: 'skip_nft' }
+                        ]
+                    ]
+                };
+
+                await bot.sendMessage(chatId, nftMessage, {
+                    parse_mode: 'Markdown',
+                    reply_markup: nftKeyboard
+                });
+                
+                // Don't clear memory state here - keep it for NFT minting
+                // memoryStates.delete(telegramId); // REMOVED THIS LINE
                 
             } catch (apiError) {
                 console.error('Error creating enhanced memory poster:', apiError);
@@ -1064,16 +1146,34 @@ bot.on('photo', async (msg) => {
                     caption: fallbackMessage,
                     parse_mode: 'Markdown'
                 });
+                
+                // Don't clear memory state here either - keep it for potential NFT minting
+                // memoryStates.delete(telegramId); // REMOVED THIS LINE
             }
             
-            // Clear memory state
-            memoryStates.delete(telegramId);
+            // Don't clear memory state here - preserve it for NFT minting
+            // The memory state will be cleared only after NFT minting is complete or skipped
+            console.log('=== PHOTO PROCESSING COMPLETED ===');
+            console.log('Memory state preserved for NFT minting');
+            console.log('Current memory states:', Array.from(memoryStates.entries()));
         } catch (error) {
             console.error('Error processing photo for memory:', error);
             await bot.sendMessage(chatId, 
                 '❌ Sorry, there was an error processing your photo. Please try again.'
             );
-            memoryStates.delete(telegramId);
+            // Don't clear memory state here - let the finally block handle it
+            // memoryStates.delete(telegramId); // REMOVED THIS LINE
+        } finally {
+            // Only clear the processing flag, don't clear the entire memory state
+            // The memory state should be preserved for NFT minting
+            const currentState = memoryStates.get(telegramId);
+            if (currentState && currentState.processing) {
+                console.log('=== CLEARING PROCESSING FLAG ONLY ===');
+                delete currentState.processing;
+                memoryStates.set(telegramId, currentState);
+                console.log('Processing flag cleared, memory state preserved');
+                console.log('Current memory state:', currentState);
+            }
         }
     } else {
         console.log('No memory state found for user:', telegramId);
@@ -1212,10 +1312,12 @@ bot.onText(/\/help/, async (msg) => {
             `4. Show up to events to get your stake back plus rewards!\n` +
             `5. Use /event_summary to view detailed attendance reports\n` +
             `6. Check your progress with /stats\n` +
-            `7. Create AI-enhanced memory posters with /create_memory\n\n` +
+            `7. Create AI-enhanced memory posters with /create_memory\n` +
+            `8. Mint NFTs of your memories on the blockchain\n\n` +
             `**Features:**\n` +
             `• 📍 Location-based attendance verification (within 200m)\n` +
             `• 🎨 AI-enhanced memory poster creation\n` +
+            `• 🖼️ NFT minting for permanent blockchain storage\n` +
             `• 📊 Detailed event summaries and statistics\n` +
             `• 🔗 Blockchain integration for transparency\n` +
             `• 📱 Swipeable UI for easy navigation`;
@@ -2435,6 +2537,15 @@ bot.on('callback_query', async (callbackQuery) => {
             const eventId = parseInt(data.replace('create_memory_', ''));
             
             try {
+                // Check if user is already in memory creation state
+                const existingMemoryState = memoryStates.get(telegramId);
+                if (existingMemoryState) {
+                    await bot.sendMessage(chatId, 
+                        '⚠️ You already have an active memory creation session. Please complete it first or wait for it to finish.'
+                    );
+                    return;
+                }
+
                 // Get event details
                 const event = await getEventById(eventId);
                 if (!event) {
@@ -2497,6 +2608,68 @@ bot.on('callback_query', async (callbackQuery) => {
                 );
             }
 
+            return;
+        }
+
+        // Handle NFT minting
+        if (data.startsWith('mint_nft_')) {
+            const eventId = parseInt(data.replace('mint_nft_', ''));
+            
+            console.log('=== NFT MINTING CALLBACK TRIGGERED ===');
+            console.log('Event ID:', eventId);
+            console.log('Telegram ID:', telegramId);
+            console.log('All memory states:', Array.from(memoryStates.entries()));
+            
+            // Get NFT minting data from memory state
+            const memoryState = memoryStates.get(telegramId);
+            console.log('Memory state for user:', memoryState);
+            
+            if (!memoryState || memoryState.step !== 'nft_minting') {
+                console.log('Memory state not found or wrong step');
+                console.log('Expected step: nft_minting, Got:', memoryState?.step);
+                await bot.sendMessage(chatId, '❌ NFT minting data not found. Please try creating a memory again.');
+                return;
+            }
+
+            const { imageUrl, eventName } = memoryState.data;
+            
+            await bot.sendMessage(chatId, '⏳ Minting NFT... Please wait.');
+            
+            try {
+                const { mintMemoryNFT } = require('./contract');
+                const result = await mintMemoryNFT(telegramId, eventId, imageUrl);
+                
+                const successMessage = 
+                    `🎨 **NFT Minted Successfully!**\n\n` +
+                    `📅 **Event:** ${escapeMarkdown(eventName)}\n` +
+                    `🆔 **Token ID:** \`${result.tokenId}\`\n` +
+                    `🔗 **Transaction:** \`${escapeWalletAddress(result.txHash)}\`\n` +
+                    `👤 **Minted by:** \`${escapeWalletAddress(result.userWallet)}\`\n` +
+                    `🌐 **Chain:** ${CHAINNAME}\n` +
+                    `📸 **Image URL:** ${imageUrl}\n\n` +
+                    `✨ Your memory is now permanently stored on the blockchain!`;
+
+                await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
+                
+                // Clear memory state
+                memoryStates.delete(telegramId);
+
+            } catch (error) {
+                console.error('Error minting NFT:', error);
+                await bot.sendMessage(chatId, 
+                    `❌ Failed to mint NFT: ${error.message}`
+                );
+            }
+
+            return;
+        }
+
+        // Handle NFT skip
+        if (data === 'skip_nft') {
+            await bot.sendMessage(chatId, '✅ NFT minting skipped. Your memory poster has been saved!');
+            
+            // Clear memory state
+            memoryStates.delete(telegramId);
             return;
         }
 

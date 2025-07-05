@@ -348,6 +348,86 @@ async function joinEvent(telegramId, eventId) {
     }
 }
 
+// Mint NFT for memory
+async function mintMemoryNFT(telegramId, eventId, imageUrl) {
+    try {
+        // Check if Supabase is initialized
+        if (!supabase) {
+            throw new Error('Supabase client not initialized');
+        }
+
+        // Get user wallet
+        const userData = await getUserWallet(telegramId);
+        if (!userData) {
+            throw new Error('User wallet not found');
+        }
+
+        // Get event details
+        const eventData = await getEventById(eventId);
+        if (!eventData) {
+            throw new Error('Event not found');
+        }
+
+        if (!eventData.finalized) {
+            throw new Error('Event must be finalized to mint NFT');
+        }
+
+        // Check if user is a participant
+        const { data: participant } = await supabase
+            .from('participants')
+            .select('*')
+            .eq('event_id', eventId)
+            .eq('wallet', userData.wallet)
+            .single();
+
+        if (!participant) {
+            throw new Error('You must be an event participant to mint NFT');
+        }
+
+        // Get user's private key from database
+        const { data: userPrivateKey } = await supabase
+            .from('users')
+            .select('private_key')
+            .eq('telegram_id', telegramId.toString())
+            .single();
+
+        if (!userPrivateKey) {
+            throw new Error('User private key not found');
+        }
+
+        // Create wallet instance with user's private key
+        const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+        const userWallet = new ethers.Wallet(userPrivateKey.private_key, provider);
+        
+        // Create contract instance with user's wallet
+        const contract = new ethers.Contract(
+            process.env.CONTRACT_ADDRESS,
+            require('./config').CONTRACT_ABI,
+            userWallet
+        );
+
+        // Call contract function to mint NFT using user's wallet
+        const tx = await contract.mintMemoryNFT(eventId, imageUrl);
+        const receipt = await tx.wait();
+        
+        // Get token ID from transaction receipt
+        const tokenId = receipt.logs[0].args.tokenId || receipt.logs[0].args[0];
+
+        return {
+            tokenId: tokenId.toString(),
+            txHash: receipt.hash,
+            eventId: eventId.toString(),
+            imageUrl: imageUrl,
+            eventName: eventData.name,
+            userWallet: userWallet.address
+        };
+
+    } catch (error) {
+        console.error('Error minting NFT:', error);
+        throw error;
+    }
+}
+
 module.exports = {
     createWallet,
     getUserWallet,
@@ -357,5 +437,6 @@ module.exports = {
     getJoinedEvents,
     getEventByName,
     getEventById,
-    joinEvent
+    joinEvent,
+    mintMemoryNFT
 };
