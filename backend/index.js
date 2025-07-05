@@ -646,12 +646,15 @@ bot.onText(/\/help/, async (msg) => {
             `• /confirm_attendance - View your joined events and attendance status\n` +
             `• /end_event - End your created events (creators only)\n` +
             `• /event_summary - View detailed summaries of finalized events\n\n` +
+            `**Analytics:**\n` +
+            `• /stats - View your personal statistics and achievements\n\n` +
             `**How it works:**\n` +
             `1. Create a wallet with /create_wallet\n` +
             `2. Create events with /create_event or join existing ones with /join_event\n` +
             `3. Use /confirm_attendance to view your joined events\n` +
             `4. Show up to events to get your stake back plus rewards!\n` +
-            `5. Use /event_summary to view detailed attendance reports`;
+            `5. Use /event_summary to view detailed attendance reports\n` +
+            `6. Check your progress with /stats`;
 
         await bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 
@@ -867,6 +870,149 @@ bot.onText(/\/event_summary/, async (msg) => {
         console.error('Error listing finalized events:', error);
         await bot.sendMessage(msg.chat.id, 
             '❌ Sorry, there was an error. Please try again later.'
+        );
+    }
+});
+
+// Handle /stats command (show user statistics)
+bot.onText(/\/stats/, async (msg) => {
+    try {
+        const chatId = msg.chat.id;
+        const telegramId = msg.from.id;
+
+        // Check if user has wallet
+        const userData = await getUserWallet(telegramId);
+        if (!userData) {
+            await bot.sendMessage(chatId, 
+                '❌ You need a wallet first! Use /create_wallet to create one.'
+            );
+            return;
+        }
+
+        const supabase = require('./model');
+
+        // Get events created by user
+        const { data: createdEvents, error: createdError } = await supabase
+            .from('events')
+            .select('*')
+            .eq('creator', userData.wallet);
+
+        if (createdError) {
+            console.error('Database error fetching created events:', createdError);
+            throw new Error('Failed to fetch created events');
+        }
+
+        // Get events joined by user
+        const { data: joinedEvents, error: joinedError } = await supabase
+            .from('participants')
+            .select(`
+                attended,
+                events (
+                    id,
+                    name,
+                    date,
+                    finalized
+                )
+            `)
+            .eq('wallet', userData.wallet);
+
+        if (joinedError) {
+            console.error('Database error fetching joined events:', joinedError);
+            throw new Error('Failed to fetch joined events');
+        }
+
+        // Calculate statistics
+        const totalCreated = createdEvents ? createdEvents.length : 0;
+        const totalJoined = joinedEvents ? joinedEvents.length : 0;
+        const totalAttended = joinedEvents ? joinedEvents.filter(p => p.attended).length : 0;
+        const totalNotAttended = totalJoined - totalAttended;
+        const activeCreated = createdEvents ? createdEvents.filter(e => !e.finalized).length : 0;
+        const finalizedCreated = totalCreated - activeCreated;
+        const activeJoined = joinedEvents ? joinedEvents.filter(p => !p.events.finalized).length : 0;
+        const finalizedJoined = totalJoined - activeJoined;
+
+        // Calculate success rates
+        const attendanceRate = totalJoined > 0 ? ((totalAttended / totalJoined) * 100).toFixed(1) : 0;
+        const completionRate = totalCreated > 0 ? ((finalizedCreated / totalCreated) * 100).toFixed(1) : 0;
+
+        // Generate stats message
+        let statsMessage = 
+            `📊 **Your Statistics**\n\n` +
+            `👤 **User Info:**\n` +
+            `• Name: ${userData.telegram_name}\n` +
+            `• Wallet: \`${escapeWalletAddress(userData.wallet)}\`\n\n` +
+            `🎯 **Event Creation:**\n` +
+            `• Total Created: ${totalCreated}\n` +
+            `• Active Events: ${activeCreated}\n` +
+            `• Finalized Events: ${finalizedCreated}\n` +
+            `• Completion Rate: ${completionRate}%\n\n` +
+            `🎉 **Event Participation:**\n` +
+            `• Total Joined: ${totalJoined}\n` +
+            `• Active Participations: ${activeJoined}\n` +
+            `• Finalized Participations: ${finalizedJoined}\n` +
+            `• Successfully Attended: ${totalAttended}\n` +
+            `• Not Attended: ${totalNotAttended}\n` +
+            `• Attendance Rate: ${attendanceRate}%\n\n`;
+
+        // Add recent activity if any
+        if (totalCreated > 0 || totalJoined > 0) {
+            statsMessage += `📅 **Recent Activity:**\n`;
+            
+            // Show recent created events
+            if (createdEvents && createdEvents.length > 0) {
+                const recentCreated = createdEvents
+                    .sort((a, b) => new Date(b.date) - new Date(a.date))
+                    .slice(0, 3);
+                
+                statsMessage += `**Recent Created Events:**\n`;
+                recentCreated.forEach((event, index) => {
+                    const eventDate = new Date(event.date).toLocaleString();
+                    const status = event.finalized ? '✅ Finalized' : '⏳ Active';
+                    statsMessage += `${index + 1}. ${escapeMarkdown(event.name)} - ${status}\n`;
+                });
+                statsMessage += `\n`;
+            }
+
+            // Show recent joined events
+            if (joinedEvents && joinedEvents.length > 0) {
+                const recentJoined = joinedEvents
+                    .sort((a, b) => new Date(b.events.date) - new Date(a.events.date))
+                    .slice(0, 3);
+                
+                statsMessage += `**Recent Joined Events:**\n`;
+                recentJoined.forEach((joined, index) => {
+                    const event = joined.events;
+                    const eventDate = new Date(event.date).toLocaleString();
+                    const status = joined.attended ? '✅ Attended' : (event.finalized ? '❌ Missed' : '⏳ Pending');
+                    statsMessage += `${index + 1}. ${escapeMarkdown(event.name)} - ${status}\n`;
+                });
+            }
+        } else {
+            statsMessage += `📅 **No activity yet.**\n` +
+                `Start by creating or joining events!\n\n`;
+        }
+
+        // Add achievements section
+        statsMessage += `🏆 **Achievements:**\n`;
+        if (totalCreated >= 5) {
+            statsMessage += `• 🎭 Event Organizer (Created 5+ events)\n`;
+        }
+        if (totalAttended >= 10) {
+            statsMessage += `• 🎯 Reliable Attendee (Attended 10+ events)\n`;
+        }
+        if (attendanceRate >= 80) {
+            statsMessage += `• ⭐ High Attendance Rate (80%+)\n`;
+        }
+        if (totalCreated === 0 && totalJoined === 0) {
+            statsMessage += `• 🆕 New User (Welcome to MeetUp!)\n`;
+        }
+
+        await bot.sendMessage(chatId, statsMessage, { parse_mode: 'Markdown' });
+
+    } catch (error) {
+        console.error('Error generating user stats:', error);
+        await bot.sendMessage(msg.chat.id, 
+            `❌ Failed to generate statistics: ${error.message}`
         );
     }
 });
