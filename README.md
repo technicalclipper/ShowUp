@@ -11,7 +11,7 @@
 
 ShowUp is a Telegram-native Web3 event coordination bot that transforms casual group plans into verifiable, stake-powered commitments. Using blockchain staking, live attendance proof, and AI-generated memory posters, ShowUp turns group chats into trustless event DAOs.
 
-**No more "bro sorry, I slept 😴"** - ShowUp ensures people actually show up to events!
+**No more "bro sorry, I slept 😴"** - "Let's Meet ensures people actually show up to events!
 
 ## 🎯 Problem Solved
 
