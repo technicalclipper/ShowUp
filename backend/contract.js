@@ -187,7 +187,9 @@ async function getJoinedEvents(telegramId) {
                     stake_amount,
                     creator,
                     finalized,
-                    chain
+                    chain,
+                    location_lat,
+                    location_lng
                 )
             `)
             .eq('telegram_id', telegramId.toString())
