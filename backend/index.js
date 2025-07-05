@@ -1303,6 +1303,14 @@ bot.on('location', async (msg) => {
             attendanceStates.delete(telegramId);
         }
     } else {
+        // Check if user is in event creation flow
+        const userState = userStates.get(telegramId);
+        if (userState && userState.step === 'location') {
+            console.log('=== LOCATION FOR EVENT CREATION - HANDLED BY MAIN MESSAGE HANDLER ===');
+            // Let the main message handler process this for event creation
+            return;
+        }
+        
         console.log('No attendance state found for user:', telegramId);
         await bot.sendMessage(chatId, 
             '❌ No active attendance confirmation. Please use /confirm_attendance first.'
