@@ -32,6 +32,8 @@ FLow Mainnet deployed Contract Address: 0x0DA218CE732930BB76d73910799ac49F285b3E
 
 Zircuit garfield Testnet Address: 0x024C8bE7f90cf2913816De8aFe85640f1f1a3FBd
 
+had "Transaction sent to quarantine by SLS error"
+
 Pitch deck: https://www.canva.com/design/DAGsVFjWRcI/MUSB2VmBATcXK6JVY9ZepQ/edit?utm_content=DAGsVFjWRcI&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton
 
 ## ✨ Features
