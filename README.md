@@ -26,7 +26,10 @@ People flake on group plans because there's no commitment or consequence. This b
 - **On-chain reward splitting** to attendees
 - **AI-generated memory posters**, stored in decentralized storage (Walrus)
 
-FLow Mainnet deployed Contract Address: 0x0DA218CE732930BB76d73910799ac49F285b3E27   ||||||||||
+FLow Mainnet deployed Contract Address: 0x0DA218CE732930BB76d73910799ac49F285b3E27   
+
+----------------------------------------------------------------------------------
+
 Zircuit garfield Testnet Address: 0x024C8bE7f90cf2913816De8aFe85640f1f1a3FBd
 
 Pitch deck: https://www.canva.com/design/DAGsVFjWRcI/MUSB2VmBATcXK6JVY9ZepQ/edit?utm_content=DAGsVFjWRcI&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton
