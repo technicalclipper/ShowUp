@@ -26,6 +26,8 @@ People flake on group plans because there's no commitment or consequence. This b
 - **On-chain reward splitting** to attendees
 - **AI-generated memory posters**, stored in decentralized storage (Walrus)
 
+FLow deployed Contract Address: 0x0DA218CE732930BB76d73910799ac49F285b3E27
+
 ## ✨ Features
 
 ### 🎉 Event Management
@@ -215,7 +217,7 @@ The project uses Supabase with the following tables:
 
 ### Live Bot
 - **Bot Link**: https://t.me/Leeeeeets_meet_bot
-- **Network**: Flow Testnet
+- **Network**: Flow Testnet      ||   deployed contract address = 0x0DA218CE732930BB76d73910799ac49F285b3E27
 - **Layer 2**: Zircuit for enhanced performance
 - **Storage**: Walrus Decentralized Storage
 - **AI**: OpenAI GPT-Image-1
