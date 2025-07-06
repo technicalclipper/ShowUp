@@ -27,6 +27,7 @@ People flake on group plans because there's no commitment or consequence. This b
 - **AI-generated memory posters**, stored in decentralized storage (Walrus)
 
 FLow deployed Contract Address: 0x0DA218CE732930BB76d73910799ac49F285b3E27
+Zircuit garfield Testnet Address: 0x024C8bE7f90cf2913816De8aFe85640f1f1a3FBd
 
 ## ✨ Features
 
@@ -218,7 +219,7 @@ The project uses Supabase with the following tables:
 ### Live Bot
 - **Bot Link**: https://t.me/Leeeeeets_meet_bot
 - **Network**: Flow Testnet      ||   deployed contract address = 0x0DA218CE732930BB76d73910799ac49F285b3E27
-- **Layer 2**: Zircuit for enhanced performance
+- **Layer 2**: Zircuit for enhanced performance ||  Zircuit garfield Testnet Address: 0x024C8bE7f90cf2913816De8aFe85640f1f1a3FBd
 - **Storage**: Walrus Decentralized Storage
 - **AI**: OpenAI GPT-Image-1
 
